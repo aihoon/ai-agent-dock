@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# 가상환경, 환경 변수(API 키 등 비밀 값)
+.venv/
+.env
+.env.*
+!.env.example
+
+# 테스트·도구 캐시
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+
+# 로그와 실행 기록(에이전트 로그, 트레이스)
+*.log
+logs/
+
+# 로컬 도구 설정(개인 환경)
+.serena/
+.claude/settings.local.json
+.claude/.headroom_wrap_*
+
+# OS
+.DS_Store

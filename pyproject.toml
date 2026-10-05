@@ -1,0 +1,22 @@
+[project]
+name = "ai-agent-dock"
+version = "0.1.0"
+description = "Domain-pluggable AI agent system: common core + domain packs"
+readme = "README.md"
+authors = [
+    { name = "HOON PAEK", email = "hoon.paek@neoplatform.net" }
+]
+requires-python = ">=3.12"
+dependencies = []
+
+[build-system]
+requires = ["uv_build>=0.12.5,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
