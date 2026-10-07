@@ -1,7 +1,7 @@
 [project]
 name = "ai-agent-dock"
 version = "0.1.0"
-description = "Domain-pluggable AI agent system: common core + domain packs"
+description = "AI Agent Dock: a general-purpose conversational agent platform that hosts applications"
 readme = "README.md"
 authors = [
     { name = "HOON PAEK", email = "hoon.paek@neoplatform.net" }

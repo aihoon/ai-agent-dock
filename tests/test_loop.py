@@ -22,7 +22,7 @@ def test_consecutive_tool_calls():
     result = run_agent("질문", [tool], llm=llm)
 
     assert executed == [(1, 2), (3, 4)]
-    assert (result.status, result.answer, result.turns) == ("completed", "끝", 3)
+    assert (result.status, result.answer, result.steps) == ("completed", "끝", 3)
     # 두 번째 모델 호출은 첫 번째 Tool 결과를 이력에서 볼 수 있어야 한다.
     assert [m.content for m in llm.calls[1] if m.role == "tool"] == ["3"]
 
@@ -56,25 +56,25 @@ def test_unknown_tool_and_bad_arguments_are_reported():
     assert "잘못된 Tool 인자" in errors[1]
 
 
-def test_max_turns_stops_infinite_loop():
-    """모델이 끝없이 Tool만 요청해도 최대 턴에서 반드시 종료된다."""
+def test_max_steps_stops_infinite_loop():
+    """모델이 끝없이 Tool만 요청해도 최대 스텝에서 반드시 종료된다."""
     count = []
     ping = Tool("ping", "", EMPTY_SCHEMA, lambda: count.append(1) or "pong")
     llm = FakeLLM([tool_call("c1", "ping")], repeat_last=True)
 
-    result = run_agent("질문", [ping], max_turns=3, llm=llm)
+    result = run_agent("질문", [ping], max_steps=3, llm=llm)
 
-    assert (result.status, result.turns) == ("max_turns", 3)
+    assert (result.status, result.steps) == ("max_steps", 3)
     assert len(llm.calls) == 3 and len(count) == 3
 
 
-def test_max_turns_comes_from_env_when_not_passed(monkeypatch):
-    """max_turns 인자가 없으면 환경 변수 AGENT_MAX_TURNS를 쓰고, 인자가 있으면 인자가 우선한다."""
+def test_max_steps_comes_from_env_when_not_passed(monkeypatch):
+    """max_steps 인자가 없으면 환경 변수 AGENT_MAX_STEPS를 쓰고, 인자가 있으면 인자가 우선한다."""
     ping = Tool("ping", "", EMPTY_SCHEMA, lambda: "pong")
-    monkeypatch.setenv("AGENT_MAX_TURNS", "2")
+    monkeypatch.setenv("AGENT_MAX_STEPS", "2")
 
     from_env = run_agent("질문", [ping], llm=FakeLLM([tool_call("c1", "ping")], repeat_last=True))
-    explicit = run_agent("질문", [ping], max_turns=4, llm=FakeLLM([tool_call("c1", "ping")], repeat_last=True))
+    explicit = run_agent("질문", [ping], max_steps=4, llm=FakeLLM([tool_call("c1", "ping")], repeat_last=True))
 
-    assert from_env.turns == 2
-    assert explicit.turns == 4
+    assert from_env.steps == 2
+    assert explicit.steps == 4

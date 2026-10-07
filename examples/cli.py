@@ -71,4 +71,4 @@ if __name__ == "__main__":
     question = " ".join(sys.argv[1:]) or "지금 몇 시야? 그리고 17*23은 얼마야?"
     result = run_agent(question, TOOLS, system="계산과 시간 조회는 반드시 Tool을 사용해 답한다.")
     print(result.answer)
-    print(f"[status={result.status}, turns={result.turns}]")
+    print(f"[status={result.status}, steps={result.steps}]")

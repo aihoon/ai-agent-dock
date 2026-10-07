@@ -48,21 +48,21 @@ class Tracer:
 
     def __init__(self, llm):
         self._llm = llm
-        self.turn = 0
+        self.step = 0
         self._seen = 0  # 이미 보여 준 이력 항목 수
 
     def llm(self, history, tools, system):
-        self.turn += 1
-        banner(f"턴 {self.turn}")
+        self.step += 1
+        banner(f"스텝 {self.step}")
         new = history[self._seen :]
         if new:
-            label = "이력에 새로 들어온 항목" if self.turn > 1 else "첫 입력"
-            print(f"[{self.turn}-1] {label}:")
+            label = "이력에 새로 들어온 항목" if self.step > 1 else "첫 입력"
+            print(f"[{self.step}-1] {label}:")
             for m in new:
                 print(f"       {describe(m)}")
-        print(f"[{self.turn}-2] 모델 호출 → 이력 {len(history)}개, Tool {len(tools)}개를 보낸다")
+        print(f"[{self.step}-2] 모델 호출 → 이력 {len(history)}개, Tool {len(tools)}개를 보낸다")
         response = self._llm(history, tools, system)
-        print(f"[{self.turn}-3] 모델 응답:")
+        print(f"[{self.step}-3] 모델 응답:")
         print(f"       텍스트   : {clip(response.text) if response.text else '(없음)'}")
         if response.tool_calls:
             for c in response.tool_calls:
@@ -76,7 +76,7 @@ class Tracer:
 
     def wrap_tool(self, tool: Tool) -> Tool:
         def traced(**kwargs):
-            print(f"[{self.turn}-4] Tool 실행: {tool.name}({kwargs})")
+            print(f"[{self.step}-4] Tool 실행: {tool.name}({kwargs})")
             try:
                 result = tool.func(**kwargs)
             except Exception as e:
@@ -127,20 +127,20 @@ def main():
     parser = argparse.ArgumentParser(description="Agent Loop 단계별 출력 데모")
     parser.add_argument("question", nargs="*", help="실제 모델에 보낼 질문(생략하면 기본 질문)")
     parser.add_argument("--scenario", choices=SCENARIOS, help="모델 없이 시나리오 실행")
-    parser.add_argument("--max-turns", type=int, help="모델 호출 횟수 상한(생략하면 .env의 AGENT_MAX_TURNS 또는 10)")
+    parser.add_argument("--max-steps", type=int, help="한 턴에서 모델을 호출하는 횟수 상한(생략하면 .env의 AGENT_MAX_STEPS 또는 10)")
     args = parser.parse_args()
 
     load_dotenv()  # 시작점에서 .env를 한 번만 읽는다.
     logging.basicConfig(level=logging.ERROR)  # 단계 출력이 이 데모의 목적이라, 로그는 오류만 보인다.
 
     if args.scenario:
-        question, model, scenario_turns = SCENARIOS[args.scenario]
+        question, model, scenario_steps = SCENARIOS[args.scenario]
         mode = f"가짜 모델(시나리오: {args.scenario})"
     else:
         question = " ".join(args.question) or "지금 몇 시야? 그리고 17*23은 얼마야? 두 결과를 한 문장으로 말해 줘."
-        model, scenario_turns = call_llm, None
+        model, scenario_steps = call_llm, None
         mode = "실제 모델(.env의 LLM_PROVIDER)"
-    max_turns = args.max_turns or scenario_turns
+    max_steps = args.max_steps or scenario_steps
 
     tracer = Tracer(model)
     tools = [tracer.wrap_tool(t) for t in TOOLS]
@@ -150,13 +150,13 @@ def main():
     print(f"질문      : {question}")
     print(f"시스템    : {SYSTEM}")
     print(f"Tool      : {', '.join(t.name for t in tools)}")
-    print(f"최대 턴   : {max_turns or '(.env의 AGENT_MAX_TURNS 또는 기본 10)'}")
+    print(f"최대 스텝 : {max_steps or '(.env의 AGENT_MAX_STEPS 또는 기본 10)'}")
 
-    result = run_agent(question, tools, system=SYSTEM, max_turns=max_turns, llm=tracer.llm)
+    result = run_agent(question, tools, system=SYSTEM, max_steps=max_steps, llm=tracer.llm)
 
     banner("결과")
-    print(f"종료 사유 : {result.status}  ({'최종 답변으로 종료' if result.status == 'completed' else '최대 턴에 도달해 강제 종료'})")
-    print(f"모델 호출 : {result.turns}회")
+    print(f"종료 사유 : {result.status}  ({'최종 답변으로 종료' if result.status == 'completed' else '최대 스텝에 도달해 강제 종료'})")
+    print(f"모델 호출 : {result.steps}회")
     print(f"최종 답변 : {result.answer if result.answer else '(없음)'}")
     banner("최종 이력(모델이 마지막에 본 전체 대화)")
     for i, m in enumerate(result.history, 1):

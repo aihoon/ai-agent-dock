@@ -1,23 +1,35 @@
 # ai-agent-dock
 
-공통 코어 위에 도메인 팩을 붙여 확장하는 AI 에이전트 시스템 (학습 프로젝트).  
+범용 대화형 에이전트 플랫폼(AI Agent Dock)을 만드는 학습 프로젝트.
+Tool 호출, 스킬, 세션 기반 대화를 갖춘 플랫폼을 만들고, 그 위에 스킬·플러그인을 설치하거나 코드 워크플로를 얹어 **애플리케이션**을 만든다.
 
 ## 현재 단계
-C0 (코어 v0.0, 프로젝트 기반).
+C1 완료(Agent Loop). 다음은 C2(대화 세션과 대화형 CLI). 태그: `c0`, `c1`.
 
 ## 실행
 
 ```bash
 uv sync
-uv run python -c "import ai_agent_dock.core"   # 출력 없이 끝나면 정상
+cp .env.example .env     # 값을 채운다(.env는 git에 올리지 않는다)
+uv run pytest            # 테스트(네트워크 없이 실행)
+uv run python examples/walkthrough.py --scenario error   # 루프 동작을 단계별로 본다(모델 없이)
+uv run python examples/walkthrough.py                    # 실제 모델로 단계별 확인(.env 필요)
 ```
 
 Python 3.12, 패키지 관리는 [uv](https://docs.astral.sh/uv/)를 쓴다.
 
+## 용어
+
+- **턴(Turn, 문답)**: 사용자 입력 하나와 최종 답변 하나
+- **스텝(Step)**: 한 턴 안에서 모델을 한 번 호출하는 루프 한 바퀴 (`max_steps`)
+- 그 밖의 용어는 Notion의 Terminology 페이지에 정리한다.
+
 ## 구조
 
-- `src/ai_agent_dock/core/`: 도메인 지식이 없는 공통 코어
-- `src/ai_agent_dock/packs/<도메인>/`: 도메인 팩 (코어 검증 후 추가 예정)
-- `tests/`: 테스트 (코드가 생기는 C1부터)
+- `src/ai_agent_dock/core/llm/`: 제공자 독립 LLM 호출(`call_llm`)과 OpenAI·Anthropic 어댑터
+- `src/ai_agent_dock/core/runtime/`: Agent Loop
+- `src/ai_agent_dock/env.py`: 환경 변수 읽기 도우미
+- `examples/`: CLI 데모와 단계별 출력 데모
+- `tests/`: 테스트
 
 설계와 커리큘럼은 Notion의 "Claude 학습 로그"에 정리한다.

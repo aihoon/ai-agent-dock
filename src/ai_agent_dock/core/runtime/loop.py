@@ -1,6 +1,9 @@
 """Agent Loop: 모델 호출 → Tool 실행 → 결과 관찰을 반복한다.
 
-조절 가능한 환경 변수: AGENT_MAX_TURNS (모델 호출 횟수의 상한, 기본 10)
+용어: 사용자 입력 하나와 최종 답변 하나를 "턴(문답)"이라 하고, 한 턴 안에서 모델을 한 번 호출하는
+루프 한 바퀴를 "스텝"이라 한다. run_agent는 턴 하나를 처리하며, 그 안에서 스텝을 반복한다.
+
+조절 가능한 환경 변수: AGENT_MAX_STEPS (한 턴에서 모델을 호출하는 횟수의 상한, 기본 10)
 """
 
 from __future__ import annotations
@@ -15,7 +18,7 @@ from ..llm import LLMResponse, Message, Tool, ToolCall, call_llm
 
 log = logging.getLogger(__name__)
 
-DEFAULT_MAX_TURNS = 10
+DEFAULT_MAX_STEPS = 10
 
 
 @dataclass
@@ -23,8 +26,8 @@ class AgentResult:
     """run_agent의 결과."""
 
     answer: str | None
-    status: str  # "completed"(최종 답변으로 종료) 또는 "max_turns"(최대 턴 도달로 종료)
-    turns: int  # 모델을 호출한 횟수
+    status: str  # "completed"(최종 답변으로 종료) 또는 "max_steps"(최대 스텝 도달로 종료)
+    steps: int  # 모델을 호출한 횟수
     history: list[Message]
 
 
@@ -33,20 +36,20 @@ def run_agent(
     tools: list[Tool],
     *,
     system: str | None = None,
-    max_turns: int | None = None,
+    max_steps: int | None = None,
     llm: Callable[[list[Message], list[Tool], str | None], LLMResponse] = call_llm,
 ) -> AgentResult:
-    """질문 하나를 처리한다. max_turns는 모델을 호출하는 횟수의 상한이다.
+    """턴 하나(질문 하나)를 처리한다. max_steps는 모델을 호출하는 횟수의 상한이다.
 
-    max_turns 우선순위: 인자 > 환경 변수 AGENT_MAX_TURNS > 기본값 10.
+    max_steps 우선순위: 인자 > 환경 변수 AGENT_MAX_STEPS > 기본값 10.
     """
-    if max_turns is None:
-        max_turns = env_int("AGENT_MAX_TURNS", DEFAULT_MAX_TURNS)
+    if max_steps is None:
+        max_steps = env_int("AGENT_MAX_STEPS", DEFAULT_MAX_STEPS)
     tools_by_name = {t.name: t for t in tools}
     history = [Message(role="user", content=question)]
     answer: str | None = None
 
-    for turn in range(1, max_turns + 1):
+    for step in range(1, max_steps + 1):
         response = llm(history, tools, system)
         # 응답을 이력에 그대로 이어 붙여야 모델이 다음 호출에서 자신의 이전 판단을 본다.
         history.append(
@@ -55,16 +58,16 @@ def run_agent(
         answer = response.text
 
         if not response.tool_calls:
-            log.info("turn %d: 최종 답변", turn)
-            return AgentResult(answer=answer, status="completed", turns=turn, history=history)
+            log.info("step %d: 최종 답변", step)
+            return AgentResult(answer=answer, status="completed", steps=step, history=history)
 
         for call in response.tool_calls:
             content, is_error = _execute(tools_by_name, call)
             history.append(Message(role="tool", content=content, tool_call_id=call.id, is_error=is_error))
 
     # 모델이 끝까지 Tool만 요청했다. 마지막 응답 텍스트(없을 수 있음)와 함께 종료 사유를 알린다.
-    log.warning("최대 턴(%d)에 도달해 종료", max_turns)
-    return AgentResult(answer=answer, status="max_turns", turns=max_turns, history=history)
+    log.warning("최대 스텝(%d)에 도달해 종료", max_steps)
+    return AgentResult(answer=answer, status="max_steps", steps=max_steps, history=history)
 
 
 def _execute(tools_by_name: dict[str, Tool], call: ToolCall) -> tuple[str, bool]:
