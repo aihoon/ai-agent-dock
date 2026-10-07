@@ -40,15 +40,20 @@ class Session:
         self.llm = llm or partial(call_llm, provider=provider)
         self.history: list[Message] = []
 
-    def ask(self, question: str) -> AgentResult:
-        """턴 하나를 처리한다. 모델 호출이 예외로 실패하면 예외가 그대로 전달되고 이력은 바뀌지 않는다."""
+    def ask(self, question: str, on_text_delta: Callable[[str], None] | None = None) -> AgentResult:
+        """턴 하나를 처리한다. 모델 호출이 예외로 실패하면 예외가 그대로 전달되고 이력은 바뀌지 않는다.
+
+        on_text_delta를 주면 모든 스텝의 답 글자 조각을 도착하는 대로 전달한다(스트리밍).
+        이때 self.llm은 on_text_delta 키워드 인자를 받아야 한다(call_llm은 받는다). 이력 처리는 스트리밍 여부와 같다.
+        """
+        llm = self.llm if on_text_delta is None else partial(self.llm, on_text_delta=on_text_delta)
         result = run_agent(
             question,
             self.tools,
             history=self.history,
             system_prompt=self.system_prompt,
             max_steps=self.max_steps,
-            llm=self.llm,
+            llm=llm,
         )
         # 예외가 나면 이 줄에 도달하지 않으므로 실패한 턴은 이력에 남지 않는다.
         # max_steps로 끝난 턴도 모든 Tool 요청에 결과가 붙어 있어 이력이 일관되므로 그대로 유지한다.

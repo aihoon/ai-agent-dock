@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from functools import cache
 from importlib import import_module
 from types import ModuleType
@@ -33,6 +34,14 @@ def call_llm(
     tools: list[Tool],
     system_prompt: str | None = None,
     provider: str | None = None,
+    on_text_delta: Callable[[str], None] | None = None,
 ) -> LLMResponse:
-    """모델을 한 번 호출한다. 제공자 우선순위: provider 인자 > 환경 변수 LLM_PROVIDER > 기본값 openai."""
-    return _provider(provider or env_str("LLM_PROVIDER", "openai")).call(history, tools, system_prompt)
+    """모델을 한 번 호출한다. 제공자 우선순위: provider 인자 > 환경 변수 LLM_PROVIDER > 기본값 openai.
+
+    on_text_delta를 주면 스트리밍으로 받으며, 답의 글자 조각이 도착할 때마다 호출한다(Tool 인자 조각은 전달하지 않는다).
+    반환값은 스트리밍 여부와 관계없이 같은 형식의 LLMResponse다. 스트리밍 여부를 어떻게 정할지는 호출하는 쪽의 몫이다.
+    """
+    adapter = _provider(provider or env_str("LLM_PROVIDER", "openai"))
+    if on_text_delta is None:
+        return adapter.call(history, tools, system_prompt)
+    return adapter.call(history, tools, system_prompt, on_text_delta)

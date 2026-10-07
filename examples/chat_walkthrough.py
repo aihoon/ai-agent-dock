@@ -7,6 +7,8 @@
   uv run python examples/chat_walkthrough.py --scenario memory     # 모델 없이: 앞 대화를 기억하는 모습
   uv run python examples/chat_walkthrough.py --scenario fail       # 모델 없이: 도중에 실패해도 이력이 안 깨지는 모습
   uv run python examples/chat_walkthrough.py --scenario maxsteps   # 모델 없이: 최대 스텝 뒤에도 대화가 이어지는 모습
+  uv run python examples/chat_walkthrough.py --scenario memory --stream   # 모델 없이: 글자 조각이 도착하는 모습(│가 조각 경계)
+  uv run python examples/chat_walkthrough.py --stream "17*23은 얼마야?"    # 실제 모델로 스트리밍
   uv run python examples/chat_walkthrough.py "17*23은 얼마야?" "거기에 2를 곱해 줘"   # 실제 모델로 여러 턴
   uv run python examples/chat_walkthrough.py --provider anthropic "안녕" "내가 방금 뭐라고 했지?"
 
@@ -26,10 +28,45 @@ from ai_agent_dock.core.tools import BUILTIN_TOOLS
 
 
 class TurnTracer(Tracer):
-    """Tracer를 턴마다 스텝 번호를 다시 세도록 확장한다."""
+    """Tracer를 턴마다 스텝 번호를 다시 세도록, 그리고 스트리밍 콜백을 받아 둘 수 있도록 확장한다."""
+
+    on_text_delta = None  # 이번 모델 호출에 쓸 글자 조각 콜백(스트리밍이 아니면 None)
 
     def begin_turn(self):
         self.step = 0
+
+    def llm(self, history, tools, system_prompt, on_text_delta=None):
+        self.on_text_delta = on_text_delta
+        return super().llm(history, tools, system_prompt)
+
+
+class DeltaPrinter:
+    """글자 조각(델타)이 도착하는 모습을 보여 준다. 조각 경계를 │로 표시한다."""
+
+    def __init__(self):
+        self.count = 0
+
+    def __call__(self, text):
+        print(("       스트리밍 : " if self.count == 0 else "│") + text, end="", flush=True)
+        self.count += 1
+
+    def close(self):
+        if self.count:
+            print(f"  ← 글자 조각 {self.count}개가 도착하는 대로 출력됨")
+        self.count = 0
+
+
+def streaming(llm):
+    """가짜 모델이 스트리밍처럼 동작하게 감싼다. 응답 텍스트를 세 글자씩 조각내 on_text_delta로 전달한다."""
+
+    def wrapped(history, tools, system_prompt, on_text_delta=None):
+        response = llm(history, tools, system_prompt)
+        if on_text_delta and response.text:
+            for i in range(0, len(response.text), 3):
+                on_text_delta(response.text[i : i + 3])
+        return response
+
+    return wrapped
 
 
 def final(text):
@@ -92,6 +129,7 @@ def main():
     parser.add_argument("--scenario", choices=SCENARIOS, help="모델 없이 시나리오 실행")
     parser.add_argument("--provider", help="LLM 제공자(openai, anthropic). 생략하면 .env의 LLM_PROVIDER")
     parser.add_argument("--max-steps", type=int, help="한 턴에서 모델을 호출하는 횟수 상한")
+    parser.add_argument("--stream", action="store_true", help="스트리밍으로 받아 글자 조각이 도착하는 모습을 보여 준다")
     args = parser.parse_args()
 
     load_dotenv()
@@ -111,8 +149,24 @@ def main():
     if args.scenario == "fail":
         turn_models = [failing_after_tool(), scripted(ask("c9", "calculate", expression="1+1"), final("2입니다."))]
 
+    delta = DeltaPrinter() if args.stream else None
+    # 가짜 모델(시나리오)은 스트리밍을 모르므로, 스트리밍을 켜면 응답을 조각내 전달하도록 감싼다. 실제 모델은 그대로 쓴다.
+    prepare = streaming if (delta and args.scenario) else (lambda m: m)
+    model = prepare(model) if model else None
+    turn_models = [prepare(m) for m in turn_models] if turn_models else None
+
     holder = {"llm": model}
-    tracer = TurnTracer(lambda history, tools, system_prompt: holder["llm"](history, tools, system_prompt))
+
+    def call_model(history, tools, system_prompt):
+        callback = tracer.on_text_delta
+        if callback is None:
+            return holder["llm"](history, tools, system_prompt)
+        try:
+            return holder["llm"](history, tools, system_prompt, on_text_delta=callback)
+        finally:
+            delta.close()  # 조각을 출력하던 줄을 끝낸다.
+
+    tracer = TurnTracer(call_model)
     session = Session([tracer.wrap_tool(t) for t in BUILTIN_TOOLS], max_steps=max_steps, llm=tracer.llm)
 
     banner("시작")
@@ -129,7 +183,7 @@ def main():
         banner(f"턴 {turn}: {question}")
         print(f"턴 시작 전 세션 이력: {len(session.history)}개 (앞 턴의 대화를 이 이력으로 모델에 전달한다)")
         try:
-            result = session.ask(question)
+            result = session.ask(question, on_text_delta=delta)
         except Exception as e:
             print(f"\n✗ 이 턴은 실패했다: {type(e).__name__}: {e}")
             print("   → 세션은 실패한 턴의 변경을 버리고, 턴 시작 전 이력 그대로 유지한다.")

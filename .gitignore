@@ -16,6 +16,7 @@ dist/
 .coverage
 htmlcov/
 .ruff_cache/
+.vscode/
 
 # 로그와 실행 기록(에이전트 로그, 트레이스)
 *.log

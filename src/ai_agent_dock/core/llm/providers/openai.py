@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from functools import cache
 from typing import Any
 
@@ -107,5 +108,19 @@ def build_request(history: list[Message], tools: list[Tool], system_prompt: str 
     return kwargs
 
 
-def call(history: list[Message], tools: list[Tool], system_prompt: str | None = None) -> LLMResponse:
-    return parse(_client().responses.create(**build_request(history, tools, system_prompt)))
+def call(
+    history: list[Message],
+    tools: list[Tool],
+    system_prompt: str | None = None,
+    on_text_delta: Callable[[str], None] | None = None,
+) -> LLMResponse:
+    """모델을 한 번 호출한다. on_text_delta를 주면 스트리밍으로 받으며 글자 조각이 올 때마다 호출한다."""
+    kwargs = build_request(history, tools, system_prompt)
+    if on_text_delta is None:
+        return parse(_client().responses.create(**kwargs))
+    with _client().responses.stream(**kwargs) as stream:
+        for event in stream:
+            if event.type == "response.output_text.delta":
+                on_text_delta(event.delta)
+        # 글자 조각만 우리가 전달하고, 최종 응답은 SDK가 조립한 결과를 기존 parse()로 바꾼다(Tool 인자 포함).
+        return parse(stream.get_final_response())
