@@ -94,7 +94,7 @@ def parse(response: Any) -> LLMResponse:
     )
 
 
-def build_request(history: list[Message], tools: list[Tool], system: str | None = None) -> dict[str, Any]:
+def build_request(history: list[Message], tools: list[Tool], system_prompt: str | None = None) -> dict[str, Any]:
     """환경 설정과 이력으로 responses.create 인자를 만든다. 네트워크 호출은 하지 않는다."""
     kwargs: dict[str, Any] = {"model": env_str("OPENAI_MODEL", DEFAULT_MODEL), "input": to_input(history)}
     max_output = env_int("OPENAI_MAX_OUTPUT_TOKENS")  # 없으면 API 기본값을 쓴다.
@@ -102,10 +102,10 @@ def build_request(history: list[Message], tools: list[Tool], system: str | None 
         kwargs["max_output_tokens"] = max_output
     if tools:
         kwargs["tools"] = to_tools(tools)
-    if system:
-        kwargs["instructions"] = system
+    if system_prompt:
+        kwargs["instructions"] = system_prompt
     return kwargs
 
 
-def call(history: list[Message], tools: list[Tool], system: str | None = None) -> LLMResponse:
-    return parse(_client().responses.create(**build_request(history, tools, system)))
+def call(history: list[Message], tools: list[Tool], system_prompt: str | None = None) -> LLMResponse:
+    return parse(_client().responses.create(**build_request(history, tools, system_prompt)))

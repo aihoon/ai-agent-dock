@@ -28,5 +28,11 @@ def _provider(name: str) -> ModuleType:
     return import_module(_PROVIDERS[name], __package__)
 
 
-def call_llm(history: list[Message], tools: list[Tool], system: str | None = None) -> LLMResponse:
-    return _provider(env_str("LLM_PROVIDER", "openai")).call(history, tools, system)
+def call_llm(
+    history: list[Message],
+    tools: list[Tool],
+    system_prompt: str | None = None,
+    provider: str | None = None,
+) -> LLMResponse:
+    """모델을 한 번 호출한다. 제공자 우선순위: provider 인자 > 환경 변수 LLM_PROVIDER > 기본값 openai."""
+    return _provider(provider or env_str("LLM_PROVIDER", "openai")).call(history, tools, system_prompt)

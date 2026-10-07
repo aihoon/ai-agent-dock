@@ -13,14 +13,14 @@ import argparse
 import logging
 from dataclasses import replace
 
-from cli import TOOLS  # examples/cli.py의 데모 Tool(get_current_time, calculate)
 from dotenv import load_dotenv
 
 from ai_agent_dock.core.llm import LLMResponse, Message, Tool, ToolCall, call_llm
 from ai_agent_dock.core.runtime.loop import run_agent
+from ai_agent_dock.core.tools import BUILTIN_TOOLS
 
 SHOW = 200  # 긴 내용은 이만큼만 보여 준다.
-SYSTEM = "계산과 시간 조회는 반드시 Tool을 사용해 답한다."
+SYSTEM_PROMPT = "계산과 시간 조회는 반드시 Tool을 사용해 답한다."
 
 
 def clip(text, n=SHOW):
@@ -51,7 +51,7 @@ class Tracer:
         self.step = 0
         self._seen = 0  # 이미 보여 준 이력 항목 수
 
-    def llm(self, history, tools, system):
+    def llm(self, history, tools, system_prompt):
         self.step += 1
         banner(f"스텝 {self.step}")
         new = history[self._seen :]
@@ -61,7 +61,7 @@ class Tracer:
             for m in new:
                 print(f"       {describe(m)}")
         print(f"[{self.step}-2] 모델 호출 → 이력 {len(history)}개, Tool {len(tools)}개를 보낸다")
-        response = self._llm(history, tools, system)
+        response = self._llm(history, tools, system_prompt)
         print(f"[{self.step}-3] 모델 응답:")
         print(f"       텍스트   : {clip(response.text) if response.text else '(없음)'}")
         if response.tool_calls:
@@ -93,7 +93,7 @@ def scripted(*responses):
     items = list(responses)
     state = {"n": 0}
 
-    def llm(history, tools, system):
+    def llm(history, tools, system_prompt):
         i = min(state["n"], len(items) - 1)
         state["n"] += 1
         return items[i]
@@ -143,16 +143,16 @@ def main():
     max_steps = args.max_steps or scenario_steps
 
     tracer = Tracer(model)
-    tools = [tracer.wrap_tool(t) for t in TOOLS]
+    tools = [tracer.wrap_tool(t) for t in BUILTIN_TOOLS]
 
     banner("시작")
     print(f"모드      : {mode}")
     print(f"질문      : {question}")
-    print(f"시스템    : {SYSTEM}")
+    print(f"시스템    : {SYSTEM_PROMPT}")
     print(f"Tool      : {', '.join(t.name for t in tools)}")
     print(f"최대 스텝 : {max_steps or '(.env의 AGENT_MAX_STEPS 또는 기본 10)'}")
 
-    result = run_agent(question, tools, system=SYSTEM, max_steps=max_steps, llm=tracer.llm)
+    result = run_agent(question, tools, system_prompt=SYSTEM_PROMPT, max_steps=max_steps, llm=tracer.llm)
 
     banner("결과")
     print(f"종료 사유 : {result.status}  ({'최종 답변으로 종료' if result.status == 'completed' else '최대 스텝에 도달해 강제 종료'})")

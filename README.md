@@ -28,6 +28,8 @@ Python 3.12, 패키지 관리는 [uv](https://docs.astral.sh/uv/)를 쓴다.
 
 - `src/ai_agent_dock/core/llm/`: 제공자 독립 LLM 호출(`call_llm`)과 OpenAI·Anthropic 어댑터
 - `src/ai_agent_dock/core/runtime/`: Agent Loop
+- `src/ai_agent_dock/core/session/`: 대화 세션(턴 사이에 이력을 이어 간다)
+- `src/ai_agent_dock/core/tools/`: 기본 제공 Tool(계산기, 현재 시각)
 - `src/ai_agent_dock/env.py`: 환경 변수 읽기 도우미
 - `examples/`: CLI 데모와 단계별 출력 데모
 - `tests/`: 테스트

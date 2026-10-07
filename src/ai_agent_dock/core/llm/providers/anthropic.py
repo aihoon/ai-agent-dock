@@ -86,7 +86,7 @@ def parse(response: Any) -> LLMResponse:
     return LLMResponse(text=text, tool_calls=calls, raw=list(response.content))
 
 
-def build_request(history: list[Message], tools: list[Tool], system: str | None = None) -> dict[str, Any]:
+def build_request(history: list[Message], tools: list[Tool], system_prompt: str | None = None) -> dict[str, Any]:
     """환경 설정과 이력으로 messages.create 인자를 만든다. 네트워크 호출은 하지 않는다."""
     kwargs: dict[str, Any] = {
         "model": env_str("ANTHROPIC_MODEL", DEFAULT_MODEL),
@@ -95,10 +95,10 @@ def build_request(history: list[Message], tools: list[Tool], system: str | None 
     }
     if tools:
         kwargs["tools"] = to_tools(tools)
-    if system:
-        kwargs["system"] = system
+    if system_prompt:
+        kwargs["system"] = system_prompt
     return kwargs
 
 
-def call(history: list[Message], tools: list[Tool], system: str | None = None) -> LLMResponse:
-    return parse(_client().messages.create(**build_request(history, tools, system)))
+def call(history: list[Message], tools: list[Tool], system_prompt: str | None = None) -> LLMResponse:
+    return parse(_client().messages.create(**build_request(history, tools, system_prompt)))

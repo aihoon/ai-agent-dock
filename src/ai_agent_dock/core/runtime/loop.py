@@ -35,22 +35,26 @@ def run_agent(
     question: str,
     tools: list[Tool],
     *,
-    system: str | None = None,
+    history: list[Message] | None = None,
+    system_prompt: str | None = None,
     max_steps: int | None = None,
     llm: Callable[[list[Message], list[Tool], str | None], LLMResponse] = call_llm,
 ) -> AgentResult:
     """턴 하나(질문 하나)를 처리한다. max_steps는 모델을 호출하는 횟수의 상한이다.
+
+    history는 이전 턴들의 이력이다. 넘긴 목록은 바꾸지 않고 복사해서 쓰며, 이번 턴이 반영된 전체 이력을
+    결과(AgentResult.history)로 돌려준다. 생략하면 빈 이력으로 시작한다(이전 턴을 기억하지 않는다).
 
     max_steps 우선순위: 인자 > 환경 변수 AGENT_MAX_STEPS > 기본값 10.
     """
     if max_steps is None:
         max_steps = env_int("AGENT_MAX_STEPS", DEFAULT_MAX_STEPS)
     tools_by_name = {t.name: t for t in tools}
-    history = [Message(role="user", content=question)]
+    history = [*(history or []), Message(role="user", content=question)]
     answer: str | None = None
 
     for step in range(1, max_steps + 1):
-        response = llm(history, tools, system)
+        response = llm(history, tools, system_prompt)
         # 응답을 이력에 그대로 이어 붙여야 모델이 다음 호출에서 자신의 이전 판단을 본다.
         history.append(
             Message(role="assistant", content=response.text, tool_calls=response.tool_calls, raw=response.raw)

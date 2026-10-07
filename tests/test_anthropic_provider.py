@@ -92,7 +92,7 @@ def test_build_request_reflects_env_settings(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_MODEL", "my-model")
     monkeypatch.setenv("ANTHROPIC_MAX_TOKENS", "2048")
 
-    request = build_request([Message("user", "q")], [], system="시스템")
+    request = build_request([Message("user", "q")], [], system_prompt="시스템")
 
     assert request["model"] == "my-model"
     assert request["max_tokens"] == 2048

@@ -68,6 +68,29 @@ def test_max_steps_stops_infinite_loop():
     assert len(llm.calls) == 3 and len(count) == 3
 
 
+def test_run_agent_continues_from_prior_history_without_mutating_it():
+    """이전 이력을 받으면 모델이 그 이력을 보고, 넘긴 목록은 호출 뒤에도 바뀌지 않으며, 결과에 전체 이력이 담긴다."""
+    first_llm = FakeLLM([final("A1")])
+    first = run_agent("Q1", [], llm=first_llm)
+    prior = list(first.history)
+
+    second_llm = FakeLLM([final("A2")])
+    second = run_agent("Q2", [], history=first.history, llm=second_llm)
+
+    assert [(m.role, m.content) for m in second_llm.calls[0]] == [("user", "Q1"), ("assistant", "A1"), ("user", "Q2")]
+    assert first.history == prior  # 넘긴 이력은 그대로
+    assert [m.content for m in second.history] == ["Q1", "A1", "Q2", "A2"]
+
+
+def test_run_agent_without_history_starts_fresh():
+    """history를 생략하는 C1 방식의 호출은 그대로 빈 이력에서 시작한다."""
+    llm = FakeLLM([final("A")])
+
+    run_agent("Q", [], llm=llm)
+
+    assert [m.content for m in llm.calls[0]] == ["Q"]
+
+
 def test_max_steps_comes_from_env_when_not_passed(monkeypatch):
     """max_steps 인자가 없으면 환경 변수 AGENT_MAX_STEPS를 쓰고, 인자가 있으면 인자가 우선한다."""
     ping = Tool("ping", "", EMPTY_SCHEMA, lambda: "pong")

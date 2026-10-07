@@ -13,7 +13,7 @@ class FakeLLM:
         self._repeat_last = repeat_last  # True면 응답이 바닥난 뒤에도 마지막 응답을 계속 돌려준다.
         self.calls: list[list[Message]] = []
 
-    def __call__(self, history: list[Message], tools: list[Tool], system: str | None = None) -> LLMResponse:
+    def __call__(self, history: list[Message], tools: list[Tool], system_prompt: str | None = None) -> LLMResponse:
         self.calls.append(list(history))  # 그 시점의 이력을 복사해 둔다(이후 변경 방지).
         n = len(self.calls)
         if n <= len(self._responses):

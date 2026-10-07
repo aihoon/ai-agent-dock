@@ -56,7 +56,7 @@ def test_build_request_reflects_env_settings(monkeypatch):
     monkeypatch.setenv("OPENAI_MAX_OUTPUT_TOKENS", "1234")
     tool = Tool("t", "설명", {"type": "object", "properties": {}}, lambda: None)
 
-    request = build_request([Message("user", "q")], [tool], system="시스템")
+    request = build_request([Message("user", "q")], [tool], system_prompt="시스템")
 
     assert request["model"] == "my-model"
     assert request["max_output_tokens"] == 1234
