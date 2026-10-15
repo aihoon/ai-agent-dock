@@ -7,6 +7,7 @@
   uv run python examples/chat_walkthrough.py --scenario memory     # 모델 없이: 앞 대화를 기억하는 모습
   uv run python examples/chat_walkthrough.py --scenario fail       # 모델 없이: 도중에 실패해도 이력이 안 깨지는 모습
   uv run python examples/chat_walkthrough.py --scenario maxsteps   # 모델 없이: 최대 스텝 뒤에도 대화가 이어지는 모습
+  uv run python examples/chat_walkthrough.py --scenario mcp        # 모델 없이: MCP 서버의 Tool을 부르는 모습(서버는 실제로 띄움)
   uv run python examples/chat_walkthrough.py --scenario memory --stream   # 모델 없이: 글자 조각이 도착하는 모습(│가 조각 경계)
   uv run python examples/chat_walkthrough.py --stream "17*23은 얼마야?"    # 실제 모델로 스트리밍
   uv run python examples/chat_walkthrough.py "17*23은 얼마야?" "거기에 2를 곱해 줘"   # 실제 모델로 여러 턴
@@ -17,7 +18,10 @@ scenario는 미리 정한 응답을 쓰는 가짜 모델이라 API 호출과 비
 
 import argparse
 import logging
+import sys
+from contextlib import ExitStack
 from functools import partial
+from pathlib import Path
 
 from dotenv import load_dotenv
 from walkthrough import Tracer, ask, banner, describe, scripted  # C1 워크스루의 도구를 재사용한다.
@@ -114,6 +118,21 @@ SCENARIOS = {
         ),
         2,
     ),
+    # MCP 서버(tests/mcp_test_server.py를 실제 자식 프로세스로 띄움)의 Tool을 부른다.
+    # 턴 1은 정상 호출, 턴 2는 인자를 빠뜨려 서버를 부르기 전에 검증 오류를 받고 고쳐서 다시 부르며, 턴 3은 서버 쪽 실패를 받는다.
+    "mcp": (
+        ["'안녕'을 따라 말해 줘", "'반가워'를 따라 말해 줘", "실패하는 Tool을 불러 줘"],
+        scripted(
+            ask("c1", "demo__echo", text="안녕"),
+            final("안녕"),
+            ask("c2", "demo__echo"),  # text 인자를 빠뜨림 → 레지스트리가 서버를 부르기 전에 거부한다
+            ask("c3", "demo__echo", text="반가워"),
+            final("반가워"),
+            ask("c4", "demo__fail"),  # 서버 쪽에서 실패 → 오류 관찰로 모델에 전달된다
+            final("실패했습니다."),
+        ),
+        None,
+    ),
 }
 
 
@@ -167,8 +186,28 @@ def main():
             delta.close()  # 조각을 출력하던 줄을 끝낸다.
 
     tracer = TurnTracer(call_model)
-    session = Session([tracer.wrap_tool(t) for t in BUILTIN_TOOLS], max_steps=max_steps, llm=tracer.llm)
+    with ExitStack() as stack:  # mcp 시나리오가 띄운 MCP 서버는 이 with가 끝날 때 정리된다.
+        session = Session(build_tools(args.scenario, tracer, stack), max_steps=max_steps, llm=tracer.llm)
+        walk(session, tracer, questions, turn_models, holder, delta, mode, max_steps)
 
+
+def build_tools(scenario, tracer, stack):
+    """시나리오에 쓸 Tool 목록. mcp 시나리오는 테스트용 MCP 서버(tests/mcp_test_server.py)를 실제로 띄워 그 Tool을 더한다."""
+    if scenario != "mcp":
+        return [tracer.wrap_tool(t) for t in BUILTIN_TOOLS]
+    from ai_agent_dock.core.tools import ToolRegistry
+    from ai_agent_dock.core.tools.mcp import ServerSpec, connect_mcp_servers
+
+    registry = ToolRegistry()
+    registry.add_all(BUILTIN_TOOLS)
+    demo = ServerSpec(sys.executable, [str(Path(__file__).parent.parent / "tests" / "mcp_test_server.py")])
+    connected = stack.enter_context(connect_mcp_servers({"demo": demo}, call_timeout=30, start_timeout=60))
+    for server, tools in connected.items():
+        registry.add_all(tools, source=f"mcp:{server}")
+    return [tracer.wrap_tool(t) for t in registry.tools()]
+
+
+def walk(session, tracer, questions, turn_models, holder, delta, mode, max_steps):
     banner("시작")
     print(f"모드    : {mode}")
     print(f"질문 수 : {len(questions)}턴")

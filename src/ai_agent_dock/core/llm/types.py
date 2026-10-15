@@ -42,7 +42,7 @@ class Message:
 
 @dataclass
 class Tool:
-    """모델에 알려 주고, 루프가 실행하는 Tool. 레지스트리는 C2에서 만든다."""
+    """모델에 알려 주고, 루프가 실행하는 Tool. 여러 Tool을 모아 관리하는 곳은 core/tools/registry.py의 ToolRegistry다."""
 
     name: str
     description: str

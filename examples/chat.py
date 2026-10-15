@@ -5,6 +5,7 @@
   uv run python examples/chat.py --provider anthropic  # 제공자를 인자로 지정(환경 변수보다 우선)
   uv run python examples/chat.py --max-steps 5         # 한 턴에서 모델을 호출하는 횟수 상한
   uv run python examples/chat.py --no-stream           # 일괄 응답(생략하면 .env의 AGENT_STREAM, 없으면 스트리밍)
+  uv run python examples/chat.py --mcp-config mcp.json # MCP 서버의 Tool도 함께 사용(생략하면 .env의 MCP_CONFIG)
 
 명령: /exit(종료), /reset(대화 이력 비우기), /history(이력 보기), /tools(사용 중인 Tool 보기), /help(명령 목록)
 스트리밍이면 답의 글자를 도착하는 대로 보여 주고, 일괄 응답이면 턴이 끝난 뒤 한 번에 보여 준다.
@@ -13,6 +14,7 @@
 
 import argparse
 import logging
+from contextlib import ExitStack
 from dataclasses import replace
 from functools import partial
 
@@ -20,8 +22,8 @@ from dotenv import load_dotenv
 
 from ai_agent_dock.core.llm import Message, Tool, call_llm
 from ai_agent_dock.core.session import Session
-from ai_agent_dock.core.tools import BUILTIN_TOOLS
-from ai_agent_dock.env import env_bool
+from ai_agent_dock.core.tools import BUILTIN_TOOLS, DEFAULT_MAX_RESULT_CHARS, ToolRegistry
+from ai_agent_dock.env import env_bool, env_float, env_int, env_str
 
 HELP = "/exit 종료 | /reset 대화 이력 비우기 | /history 이력 보기 | /tools 사용 중인 Tool 보기 | /help 명령 목록"
 SHOW = 80  # /history에서 한 항목을 이만큼만 보여 준다.
@@ -82,12 +84,13 @@ def brief(message: Message) -> str:
     return f"{message.role:9s}: {text}"
 
 
-def describe_tool(tool: Tool) -> str:
-    """Tool 하나를 `이름(인자, ...)`과 설명 두 줄로 설명한다. 필수 인자 뒤에는 *를 붙인다."""
+def describe_tool(tool: Tool, source: str) -> str:
+    """Tool 하나를 `이름(인자, ...) [출처]`와 설명 두 줄로 설명한다. 필수 인자 뒤에는 *를 붙인다."""
     schema = tool.parameters
     required = set(schema.get("required", []))
     args = ", ".join(f"{name}{'*' if name in required else ''}" for name in schema.get("properties", {}))
-    return f"{tool.name}({args})\n      {tool.description}"
+    first_line = (tool.description.splitlines() or [""])[0]  # 외부 서버의 설명은 길 수 있어 첫 줄만 보여 준다.
+    return f"{tool.name}({args})  [{source}]\n      {first_line[: 2 * SHOW]}"
 
 
 def main():
@@ -98,6 +101,10 @@ def main():
         "--stream",
         action=argparse.BooleanOptionalAction,
         help="스트리밍(--stream) 또는 일괄 응답(--no-stream). 생략하면 .env의 AGENT_STREAM, 없으면 스트리밍",
+    )
+    parser.add_argument(
+        "--mcp-config",
+        help="연결할 MCP 서버 목록(JSON) 경로. 생략하면 .env의 MCP_CONFIG, 없으면 MCP를 쓰지 않음(mcp.example.json 참고)",
     )
     args = parser.parse_args()
 
@@ -111,8 +118,40 @@ def main():
 
     progress = Progress()
     llm = progress.wrap_llm(partial(call_llm, provider=args.provider))
-    session = Session([progress.wrap_tool(t) for t in BUILTIN_TOOLS], max_steps=args.max_steps, llm=llm)
+    with ExitStack() as stack:  # MCP 서버 연결은 프로그램이 끝날 때 이 with가 정리한다.
+        try:
+            registry = build_registry(args, stack)
+        except ValueError as e:  # 설정 파일 오류, Tool 이름 겹침 등
+            raise SystemExit(f"설정 오류: {e}")
+        session = Session([progress.wrap_tool(t) for t in registry.tools()], max_steps=args.max_steps, llm=llm)
+        repl(session, registry, progress, stream)
 
+
+def build_registry(args, stack: ExitStack) -> ToolRegistry:
+    """내장 Tool과, 설정 파일에 적은 MCP 서버의 Tool을 한 레지스트리에 모은다. 설정 파일이 없으면 내장 Tool만 쓴다."""
+    registry = ToolRegistry(max_result_chars=env_int("TOOL_RESULT_MAX_CHARS", DEFAULT_MAX_RESULT_CHARS))
+    registry.add_all(BUILTIN_TOOLS)
+
+    config_path = args.mcp_config or env_str("MCP_CONFIG", "")  # 우선순위: 인자 > 환경 변수 > 사용 안 함
+    if config_path:
+        from ai_agent_dock.core.tools.mcp import connect_mcp_servers, load_config  # MCP SDK는 설정했을 때만 가져온다.
+
+        servers = load_config(config_path)
+        print(f"MCP 서버 {len(servers)}개에 연결합니다(처음 실행은 패키지를 내려받느라 오래 걸릴 수 있습니다)...", flush=True)
+        connected = stack.enter_context(
+            connect_mcp_servers(
+                servers,
+                call_timeout=env_float("MCP_TOOL_TIMEOUT", 30.0),
+                start_timeout=env_float("MCP_START_TIMEOUT", 60.0),
+            )
+        )
+        for server, tools in connected.items():
+            registry.add_all(tools, source=f"mcp:{server}")
+            print(f"  MCP 서버 {server}: Tool {len(tools)}개 연결됨")
+    return registry
+
+
+def repl(session: Session, registry: ToolRegistry, progress: Progress, stream: bool) -> None:
     print(f"대화를 시작합니다({'스트리밍' if stream else '일괄 응답'}). 명령을 보려면 /help 를 입력하세요.")
     while True:
         try:
@@ -135,7 +174,7 @@ def main():
             elif line == "/tools":
                 print(f"(Tool {len(session.tools)}개, *는 필수 인자)")
                 for t in session.tools:
-                    print(f"  {describe_tool(t)}")
+                    print(f"  {describe_tool(t, registry.source_of(t.name))}")
             elif line == "/help":
                 print(HELP)
             else:

@@ -27,5 +27,9 @@ logs/
 .claude/settings.local.json
 .claude/.headroom_wrap_*
 
+# MCP 서버 설정(토큰이 들어갈 수 있음)과 Filesystem 서버가 쓰는 샌드박스 폴더
+mcp.json
+sandbox/
+
 # OS
 .DS_Store

@@ -2,7 +2,7 @@
 
 import pytest
 
-from ai_agent_dock.env import env_bool, env_int, env_str
+from ai_agent_dock.env import env_bool, env_float, env_int, env_str
 
 
 def test_env_str_uses_default_when_unset_or_empty(monkeypatch):
@@ -61,3 +61,26 @@ def test_env_bool_rejects_other_values_and_names_the_variable(monkeypatch, bad):
 
     with pytest.raises(ValueError, match="X_FLAG"):
         env_bool("X_FLAG", True)
+
+
+def test_env_float_uses_default_when_unset_or_blank(monkeypatch):
+    monkeypatch.delenv("X_SEC", raising=False)
+    assert env_float("X_SEC", 30.0) == 30.0
+
+    monkeypatch.setenv("X_SEC", " ")
+    assert env_float("X_SEC", 30.0) == 30.0
+
+
+@pytest.mark.parametrize(("raw", "expected"), [("12", 12.0), ("0.5", 0.5), (" 7.25 ", 7.25)])
+def test_env_float_reads_positive_numbers(monkeypatch, raw, expected):
+    monkeypatch.setenv("X_SEC", raw)
+
+    assert env_float("X_SEC", 1.0) == expected
+
+
+@pytest.mark.parametrize("bad", ["abc", "0", "-1", "nan"])
+def test_env_float_rejects_bad_values_and_names_the_variable(monkeypatch, bad):
+    monkeypatch.setenv("X_SEC", bad)
+
+    with pytest.raises(ValueError, match="X_SEC"):
+        env_float("X_SEC", 1.0)

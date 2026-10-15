@@ -26,6 +26,20 @@ def env_bool(name: str, default: bool) -> bool:
     raise ValueError(f"{name}은 true, false, 1, 0 중 하나여야 한다: {raw!r}")
 
 
+def env_float(name: str, default: float) -> float:
+    """양수 실수 설정(초 단위 제한 시간 등)을 읽는다. 값이 없거나 비어 있으면 default, 잘못된 값이면 이름을 밝혀 오류를 낸다."""
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        raise ValueError(f"{name}은 숫자여야 한다: {raw!r}") from None
+    if not value > 0:  # nan도 걸러낸다.
+        raise ValueError(f"{name}은 0보다 커야 한다: {raw!r}")
+    return value
+
+
 def env_int(name: str, default: int | None = None) -> int | None:
     """양의 정수 설정을 읽는다. 값이 없거나 비어 있으면 default, 잘못된 값이면 이름을 밝혀 오류를 낸다."""
     raw = os.environ.get(name)
