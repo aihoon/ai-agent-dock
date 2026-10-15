@@ -87,7 +87,8 @@ class McpConnection:
             return
         params = StdioServerParameters(command=self.spec.command, args=self.spec.args, env=self.spec.env or None)
         try:
-            async with Client(params) as client:
+            # legacy: server/discover를 먼저 묻지 않고 initialize로 연결한다. 최신 서버 중 discover를 모르는 서버가 경고를 남기지 않게 한다.
+            async with Client(params, mode="legacy") as client:
                 self._tools = await _list_all_tools(client)
                 self._client = client
                 self._ready.set()
