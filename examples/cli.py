@@ -9,13 +9,16 @@ import sys
 
 from dotenv import load_dotenv
 
+from ai_agent_dock.core.llm import config_from_env
 from ai_agent_dock.core.runtime.loop import run_agent
+from ai_agent_dock.core.runtime.types import AgentSettings
 from ai_agent_dock.core.tools import BUILTIN_TOOLS
 
 if __name__ == "__main__":
     load_dotenv()  # 프로그램 시작점에서 .env를 한 번만 읽는다. LLM_PROVIDER 등이 여기서 정해진다.
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     question = " ".join(sys.argv[1:]) or "지금 몇 시야? 그리고 17*23은 얼마야?"
-    result = run_agent(question, BUILTIN_TOOLS, system_prompt="계산과 시간 조회는 반드시 Tool을 사용해 답한다.")
+    settings = AgentSettings(config=config_from_env(), tools=BUILTIN_TOOLS, system_prompt="계산과 시간 조회는 반드시 Tool을 사용해 답한다.")
+    result = run_agent(settings, question)
     print(result.answer)
     print(f"[status={result.status}, steps={result.steps}]")

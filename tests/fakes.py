@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from ai_agent_dock.core.llm import LLMResponse, Message, Tool, ToolCall
+from ai_agent_dock.core.llm import LLMConfig, LLMRequest, LLMResponse, Message, ToolCall
 
 DELTA_SIZE = 3  # 가짜 스트리밍에서 한 번에 전달하는 글자 수
+TEST_CONFIG = LLMConfig(provider="fake", model="fake-model", max_output_tokens=None)  # 가짜 모델은 설정을 읽지 않는다.
 
 
 class FakeLLM:
@@ -17,14 +18,8 @@ class FakeLLM:
         self._repeat_last = repeat_last  # True면 응답이 바닥난 뒤에도 마지막 응답을 계속 돌려준다.
         self.calls: list[list[Message]] = []
 
-    def __call__(
-        self,
-        history: list[Message],
-        tools: list[Tool],
-        system_prompt: str | None = None,
-        on_text_delta: Callable[[str], None] | None = None,
-    ) -> LLMResponse:
-        self.calls.append(list(history))  # 그 시점의 이력을 복사해 둔다(이후 변경 방지).
+    def __call__(self, request: LLMRequest, on_text_delta: Callable[[str], None] | None = None) -> LLMResponse:
+        self.calls.append(list(request.messages))  # 그 시점의 이력을 복사해 둔다(이후 변경 방지).
         n = len(self.calls)
         if n <= len(self._responses):
             response = self._responses[n - 1]

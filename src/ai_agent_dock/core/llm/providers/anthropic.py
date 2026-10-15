@@ -13,7 +13,17 @@ from anthropic import Anthropic  # 절대 import이므로 이 파일 이름(anth
 
 from ai_agent_dock.env import env_int, env_str
 
-from ..types import LLMResponse, Message, Tool, ToolCall
+from ..types import (
+    AssistantMessage,
+    LLMConfig,
+    LLMRequest,
+    LLMResponse,
+    Message,
+    Tool,
+    ToolCall,
+    ToolMessage,
+    UserMessage,
+)
 
 DEFAULT_MODEL = "claude-opus-5-5"
 DEFAULT_MAX_TOKENS = 16000  # 스트리밍을 쓰지 않는 요청에 권장되는 기본값
@@ -36,7 +46,7 @@ def to_messages(history: list[Message]) -> list[dict[str, Any]]:
             results.clear()
 
     for m in history:
-        if m.role == "tool":
+        if isinstance(m, ToolMessage):
             block: dict[str, Any] = {
                 "type": "tool_result",
                 "tool_use_id": m.tool_call_id,
@@ -47,9 +57,9 @@ def to_messages(history: list[Message]) -> list[dict[str, Any]]:
             results.append(block)
             continue
         flush()
-        if m.role == "user":
+        if isinstance(m, UserMessage):
             out.append({"role": "user", "content": m.content})
-        elif m.role == "assistant":
+        elif isinstance(m, AssistantMessage):
             if m.raw:
                 # 응답 블록(사고 블록 포함)을 그대로 돌려줘야 모델이 이전 판단을 이어 간다.
                 content: list[Any] = list(m.raw)
@@ -61,7 +71,7 @@ def to_messages(history: list[Message]) -> list[dict[str, Any]]:
                     content.append({"type": "tool_use", "id": c.id, "name": c.name, "input": c.arguments})
             out.append({"role": "assistant", "content": content})
         else:
-            raise ValueError(f"알 수 없는 role: {m.role!r}")
+            raise ValueError(f"알 수 없는 메시지 종류: {type(m).__name__}")
     flush()
     return out
 
@@ -87,28 +97,32 @@ def parse(response: Any) -> LLMResponse:
     return LLMResponse(text=text, tool_calls=calls, raw=list(response.content))
 
 
-def build_request(history: list[Message], tools: list[Tool], system_prompt: str | None = None) -> dict[str, Any]:
-    """환경 설정과 이력으로 messages.create 인자를 만든다. 네트워크 호출은 하지 않는다."""
+def config_from_env() -> LLMConfig:
+    """환경 변수로 Anthropic 설정을 만든다. Messages API는 max_tokens가 필수라서 항상 값을 준다."""
+    return LLMConfig(
+        provider="anthropic",
+        model=env_str("ANTHROPIC_MODEL", DEFAULT_MODEL),
+        max_output_tokens=env_int("ANTHROPIC_MAX_TOKENS", DEFAULT_MAX_TOKENS),
+    )
+
+
+def build_request(request: LLMRequest) -> dict[str, Any]:
+    """요청 한 번의 입력으로 messages.create 인자를 만든다. 네트워크 호출은 하지 않는다."""
     kwargs: dict[str, Any] = {
-        "model": env_str("ANTHROPIC_MODEL", DEFAULT_MODEL),
-        "max_tokens": env_int("ANTHROPIC_MAX_TOKENS", DEFAULT_MAX_TOKENS),
-        "messages": to_messages(history),
+        "model": request.config.model,
+        "max_tokens": request.config.max_output_tokens,
+        "messages": to_messages(request.messages),
     }
-    if tools:
-        kwargs["tools"] = to_tools(tools)
-    if system_prompt:
-        kwargs["system"] = system_prompt
+    if request.tools:
+        kwargs["tools"] = to_tools(request.tools)
+    if request.system_prompt:
+        kwargs["system"] = request.system_prompt
     return kwargs
 
 
-def call(
-    history: list[Message],
-    tools: list[Tool],
-    system_prompt: str | None = None,
-    on_text_delta: Callable[[str], None] | None = None,
-) -> LLMResponse:
+def call(request: LLMRequest, on_text_delta: Callable[[str], None] | None = None) -> LLMResponse:
     """모델을 한 번 호출한다. on_text_delta를 주면 스트리밍으로 받으며 글자 조각이 올 때마다 호출한다."""
-    kwargs = build_request(history, tools, system_prompt)
+    kwargs = build_request(request)
     if on_text_delta is None:
         return parse(_client().messages.create(**kwargs))
     with _client().messages.stream(**kwargs) as stream:

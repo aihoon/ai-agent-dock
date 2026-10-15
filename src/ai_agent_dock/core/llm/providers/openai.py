@@ -14,7 +14,17 @@ from openai import OpenAI  # 절대 import이므로 이 파일 이름(openai.py)
 
 from ai_agent_dock.env import env_int, env_str
 
-from ..types import LLMResponse, Message, Tool, ToolCall
+from ..types import (
+    AssistantMessage,
+    LLMConfig,
+    LLMRequest,
+    LLMResponse,
+    Message,
+    Tool,
+    ToolCall,
+    ToolMessage,
+    UserMessage,
+)
 
 DEFAULT_MODEL = "gpt-5-mini"
 
@@ -29,9 +39,9 @@ def to_input(history: list[Message]) -> list[Any]:
     """공통 대화 이력을 Responses API의 input 항목 목록으로 바꾼다."""
     items: list[Any] = []
     for m in history:
-        if m.role == "user":
+        if isinstance(m, UserMessage):
             items.append({"role": "user", "content": m.content})
-        elif m.role == "assistant":
+        elif isinstance(m, AssistantMessage):
             if m.raw:
                 # 원본 항목(추론 항목 포함)을 그대로 돌려줘야 모델이 이전 판단을 이어 간다.
                 items.extend(m.raw)
@@ -47,12 +57,12 @@ def to_input(history: list[Message]) -> list[Any]:
                             "arguments": json.dumps(c.arguments, ensure_ascii=False),
                         }
                     )
-        elif m.role == "tool":
+        elif isinstance(m, ToolMessage):
             items.append(
                 {"type": "function_call_output", "call_id": m.tool_call_id, "output": m.content or ""}
             )
         else:
-            raise ValueError(f"알 수 없는 role: {m.role!r}")
+            raise ValueError(f"알 수 없는 메시지 종류: {type(m).__name__}")
     return items
 
 
@@ -95,27 +105,30 @@ def parse(response: Any) -> LLMResponse:
     )
 
 
-def build_request(history: list[Message], tools: list[Tool], system_prompt: str | None = None) -> dict[str, Any]:
-    """환경 설정과 이력으로 responses.create 인자를 만든다. 네트워크 호출은 하지 않는다."""
-    kwargs: dict[str, Any] = {"model": env_str("OPENAI_MODEL", DEFAULT_MODEL), "input": to_input(history)}
-    max_output = env_int("OPENAI_MAX_OUTPUT_TOKENS")  # 없으면 API 기본값을 쓴다.
-    if max_output:
-        kwargs["max_output_tokens"] = max_output
-    if tools:
-        kwargs["tools"] = to_tools(tools)
-    if system_prompt:
-        kwargs["instructions"] = system_prompt
+def config_from_env() -> LLMConfig:
+    """환경 변수로 OpenAI 설정을 만든다. 없으면 기본값을 쓴다(출력 한도는 API 기본값)."""
+    return LLMConfig(
+        provider="openai",
+        model=env_str("OPENAI_MODEL", DEFAULT_MODEL),
+        max_output_tokens=env_int("OPENAI_MAX_OUTPUT_TOKENS"),
+    )
+
+
+def build_request(request: LLMRequest) -> dict[str, Any]:
+    """요청 한 번의 입력으로 responses.create 인자를 만든다. 네트워크 호출은 하지 않는다."""
+    kwargs: dict[str, Any] = {"model": request.config.model, "input": to_input(request.messages)}
+    if request.config.max_output_tokens:
+        kwargs["max_output_tokens"] = request.config.max_output_tokens
+    if request.tools:
+        kwargs["tools"] = to_tools(request.tools)
+    if request.system_prompt:
+        kwargs["instructions"] = request.system_prompt
     return kwargs
 
 
-def call(
-    history: list[Message],
-    tools: list[Tool],
-    system_prompt: str | None = None,
-    on_text_delta: Callable[[str], None] | None = None,
-) -> LLMResponse:
+def call(request: LLMRequest, on_text_delta: Callable[[str], None] | None = None) -> LLMResponse:
     """모델을 한 번 호출한다. on_text_delta를 주면 스트리밍으로 받으며 글자 조각이 올 때마다 호출한다."""
-    kwargs = build_request(history, tools, system_prompt)
+    kwargs = build_request(request)
     if on_text_delta is None:
         return parse(_client().responses.create(**kwargs))
     with _client().responses.stream(**kwargs) as stream:

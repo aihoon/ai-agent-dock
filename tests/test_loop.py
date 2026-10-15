@@ -1,9 +1,10 @@
 """Agent Loop 테스트. 가짜 모델로 연속 호출, 오류 처리, 최대 턴을 확인한다."""
 
-from fakes import FakeLLM, final, tool_call
+from fakes import TEST_CONFIG, FakeLLM, final, tool_call
 
 from ai_agent_dock.core.llm import LLMResponse, Tool, ToolCall
 from ai_agent_dock.core.runtime.loop import run_agent
+from ai_agent_dock.core.runtime.types import AgentSettings
 
 EMPTY_SCHEMA = {"type": "object", "properties": {}}
 
@@ -19,7 +20,7 @@ def test_consecutive_tool_calls():
     tool = Tool("add", "두 수를 더한다", EMPTY_SCHEMA, add)
     llm = FakeLLM([tool_call("c1", "add", a=1, b=2), tool_call("c2", "add", a=3, b=4), final("끝")])
 
-    result = run_agent("질문", [tool], llm=llm)
+    result = run_agent(AgentSettings(config=TEST_CONFIG, tools=[tool], llm=llm), "질문")
 
     assert executed == [(1, 2), (3, 4)]
     assert (result.status, result.answer, result.steps) == ("completed", "끝", 3)
@@ -35,7 +36,7 @@ def test_tool_error_does_not_stop_loop():
 
     llm = FakeLLM([tool_call("c1", "boom"), final("복구했다")])
 
-    result = run_agent("질문", [Tool("boom", "항상 실패", EMPTY_SCHEMA, boom)], llm=llm)
+    result = run_agent(AgentSettings(config=TEST_CONFIG, tools=[Tool("boom", "항상 실패", EMPTY_SCHEMA, boom)], llm=llm), "질문")
 
     assert (result.status, result.answer) == ("completed", "복구했다")
     seen = [m for m in llm.calls[1] if m.role == "tool"]
@@ -48,7 +49,7 @@ def test_unknown_tool_and_bad_arguments_are_reported():
     llm = FakeLLM([tool_call("c1", "nope"), bad_args, final("정리했다")])
     ping = Tool("ping", "", EMPTY_SCHEMA, lambda: "pong")
 
-    result = run_agent("질문", [ping], llm=llm)
+    result = run_agent(AgentSettings(config=TEST_CONFIG, tools=[ping], llm=llm), "질문")
 
     assert result.status == "completed"
     errors = [m.content for m in result.history if m.role == "tool" and m.is_error]
@@ -62,7 +63,7 @@ def test_max_steps_stops_infinite_loop():
     ping = Tool("ping", "", EMPTY_SCHEMA, lambda: count.append(1) or "pong")
     llm = FakeLLM([tool_call("c1", "ping")], repeat_last=True)
 
-    result = run_agent("질문", [ping], max_steps=3, llm=llm)
+    result = run_agent(AgentSettings(config=TEST_CONFIG, tools=[ping], max_steps=3, llm=llm), "질문")
 
     assert (result.status, result.steps) == ("max_steps", 3)
     assert len(llm.calls) == 3 and len(count) == 3
@@ -71,11 +72,11 @@ def test_max_steps_stops_infinite_loop():
 def test_run_agent_continues_from_prior_history_without_mutating_it():
     """이전 이력을 받으면 모델이 그 이력을 보고, 넘긴 목록은 호출 뒤에도 바뀌지 않으며, 결과에 전체 이력이 담긴다."""
     first_llm = FakeLLM([final("A1")])
-    first = run_agent("Q1", [], llm=first_llm)
+    first = run_agent(AgentSettings(config=TEST_CONFIG, llm=first_llm), "Q1")
     prior = list(first.history)
 
     second_llm = FakeLLM([final("A2")])
-    second = run_agent("Q2", [], history=first.history, llm=second_llm)
+    second = run_agent(AgentSettings(config=TEST_CONFIG, llm=second_llm), "Q2", history=first.history)
 
     assert [(m.role, m.content) for m in second_llm.calls[0]] == [("user", "Q1"), ("assistant", "A1"), ("user", "Q2")]
     assert first.history == prior  # 넘긴 이력은 그대로
@@ -86,7 +87,7 @@ def test_run_agent_without_history_starts_fresh():
     """history를 생략하는 C1 방식의 호출은 그대로 빈 이력에서 시작한다."""
     llm = FakeLLM([final("A")])
 
-    run_agent("Q", [], llm=llm)
+    run_agent(AgentSettings(config=TEST_CONFIG, llm=llm), "Q")
 
     assert [m.content for m in llm.calls[0]] == ["Q"]
 
@@ -96,8 +97,8 @@ def test_max_steps_comes_from_env_when_not_passed(monkeypatch):
     ping = Tool("ping", "", EMPTY_SCHEMA, lambda: "pong")
     monkeypatch.setenv("AGENT_MAX_STEPS", "2")
 
-    from_env = run_agent("질문", [ping], llm=FakeLLM([tool_call("c1", "ping")], repeat_last=True))
-    explicit = run_agent("질문", [ping], max_steps=4, llm=FakeLLM([tool_call("c1", "ping")], repeat_last=True))
+    from_env = run_agent(AgentSettings(config=TEST_CONFIG, tools=[ping], llm=FakeLLM([tool_call("c1", "ping")], repeat_last=True)), "질문")
+    explicit = run_agent(AgentSettings(config=TEST_CONFIG, tools=[ping], max_steps=4, llm=FakeLLM([tool_call("c1", "ping")], repeat_last=True)), "질문")
 
     assert from_env.steps == 2
     assert explicit.steps == 4

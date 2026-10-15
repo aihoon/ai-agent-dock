@@ -9,6 +9,7 @@
   uv run python examples/chat_walkthrough.py --scenario maxsteps   # 모델 없이: 최대 스텝 뒤에도 대화가 이어지는 모습
   uv run python examples/chat_walkthrough.py --scenario mcp        # 모델 없이: MCP 서버의 Tool을 부르는 모습(서버는 실제로 띄움)
   uv run python examples/chat_walkthrough.py --scenario memory --stream   # 모델 없이: 글자 조각이 도착하는 모습(│가 조각 경계)
+  uv run python examples/chat_walkthrough.py --scenario skill    # 모델 없이: 스킬 목록에서 본문을 load_skill로 불러 따르는 모습
   uv run python examples/chat_walkthrough.py --stream "17*23은 얼마야?"    # 실제 모델로 스트리밍
   uv run python examples/chat_walkthrough.py "17*23은 얼마야?" "거기에 2를 곱해 줘"   # 실제 모델로 여러 턴
   uv run python examples/chat_walkthrough.py --provider anthropic "안녕" "내가 방금 뭐라고 했지?"
@@ -20,15 +21,18 @@ import argparse
 import logging
 import sys
 from contextlib import ExitStack
-from functools import partial
 from pathlib import Path
 
 from dotenv import load_dotenv
 from walkthrough import Tracer, ask, banner, describe, scripted  # C1 워크스루의 도구를 재사용한다.
 
-from ai_agent_dock.core.llm import LLMResponse, call_llm
+from ai_agent_dock.core.llm import LLMConfig, LLMResponse, ToolCall, call_llm, config_from_env
+from ai_agent_dock.core.runtime.types import AgentSettings
 from ai_agent_dock.core.session import Session
+from ai_agent_dock.core.skills import make_load_skill_tool, scan_skills
 from ai_agent_dock.core.tools import BUILTIN_TOOLS
+
+SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"  # 프로젝트 루트의 skills/
 
 
 class TurnTracer(Tracer):
@@ -39,9 +43,9 @@ class TurnTracer(Tracer):
     def begin_turn(self):
         self.step = 0
 
-    def llm(self, history, tools, system_prompt, on_text_delta=None):
+    def llm(self, request, on_text_delta=None):
         self.on_text_delta = on_text_delta
-        return super().llm(history, tools, system_prompt)
+        return super().llm(request)
 
 
 class DeltaPrinter:
@@ -63,8 +67,8 @@ class DeltaPrinter:
 def streaming(llm):
     """가짜 모델이 스트리밍처럼 동작하게 감싼다. 응답 텍스트를 세 글자씩 조각내 on_text_delta로 전달한다."""
 
-    def wrapped(history, tools, system_prompt, on_text_delta=None):
-        response = llm(history, tools, system_prompt)
+    def wrapped(request, on_text_delta=None):
+        response = llm(request)
         if on_text_delta and response.text:
             for i in range(0, len(response.text), 3):
                 on_text_delta(response.text[i : i + 3])
@@ -82,7 +86,7 @@ def failing_after_tool():
     items = [ask("c1", "calculate", expression="1+1"), RuntimeError("네트워크 오류(가상)")]
     state = {"n": 0}
 
-    def llm(history, tools, system_prompt):
+    def llm(request):
         item = items[min(state["n"], len(items) - 1)]
         state["n"] += 1
         if isinstance(item, Exception):
@@ -117,6 +121,15 @@ SCENARIOS = {
             final("그만 알려 드립니다."),
         ),
         2,
+    ),
+    # 스킬 본문은 모델이 load_skill로 불러온다. 가짜 모델이 그 Tool을 먼저 부르고, 본문을 받은 뒤 답한다.
+    "skill": (
+        ["버그를 찾는 절차대로 점검해 줘"],
+        scripted(
+            LLMResponse(text=None, tool_calls=[ToolCall("c1", "load_skill", {"name": "debug-checklist"})]),  # ask()는 name 인자와 겹쳐 직접 만든다
+            final("체크리스트 순서대로 점검하겠습니다."),
+        ),
+        None,
     ),
     # MCP 서버(tests/mcp_test_server.py를 실제 자식 프로세스로 띄움)의 Tool을 부른다.
     # 턴 1은 정상 호출, 턴 2는 인자를 빠뜨려 서버를 부르기 전에 검증 오류를 받고 고쳐서 다시 부르며, 턴 3은 서버 쪽 실패를 받는다.
@@ -156,10 +169,12 @@ def main():
 
     if args.scenario:
         questions, model, scenario_steps = SCENARIOS[args.scenario]
+        config = LLMConfig(provider="scenario", model="scenario", max_output_tokens=None)  # 가짜 모델은 설정을 읽지 않는다.
         mode = f"가짜 모델(시나리오: {args.scenario})"
     else:
         questions = args.questions or ["17*23은 얼마야?", "거기에 2를 곱해 줘"]
-        model, scenario_steps = partial(call_llm, provider=args.provider), None
+        model, scenario_steps = call_llm, None
+        config = config_from_env(args.provider)
         mode = f"실제 모델(제공자: {args.provider or '.env의 LLM_PROVIDER'})"
     max_steps = args.max_steps or scenario_steps
 
@@ -176,23 +191,27 @@ def main():
 
     holder = {"llm": model}
 
-    def call_model(history, tools, system_prompt):
+    def call_model(request):
         callback = tracer.on_text_delta
         if callback is None:
-            return holder["llm"](history, tools, system_prompt)
+            return holder["llm"](request)
         try:
-            return holder["llm"](history, tools, system_prompt, on_text_delta=callback)
+            return holder["llm"](request, on_text_delta=callback)
         finally:
             delta.close()  # 조각을 출력하던 줄을 끝낸다.
 
     tracer = TurnTracer(call_model)
     with ExitStack() as stack:  # mcp 시나리오가 띄운 MCP 서버는 이 with가 끝날 때 정리된다.
-        session = Session(build_tools(args.scenario, tracer, stack), max_steps=max_steps, llm=tracer.llm)
+        settings = AgentSettings(config=config, tools=build_tools(args.scenario, tracer, stack), max_steps=max_steps, llm=tracer.llm)
+        session = Session(settings)
         walk(session, tracer, questions, turn_models, holder, delta, mode, max_steps)
 
 
 def build_tools(scenario, tracer, stack):
     """시나리오에 쓸 Tool 목록. mcp 시나리오는 테스트용 MCP 서버(tests/mcp_test_server.py)를 실제로 띄워 그 Tool을 더한다."""
+    if scenario == "skill":
+        skills = make_load_skill_tool(scan_skills(SKILLS_DIR))
+        return [tracer.wrap_tool(t) for t in [*BUILTIN_TOOLS, skills]]
     if scenario != "mcp":
         return [tracer.wrap_tool(t) for t in BUILTIN_TOOLS]
     from ai_agent_dock.core.tools import ToolRegistry
@@ -211,7 +230,7 @@ def walk(session, tracer, questions, turn_models, holder, delta, mode, max_steps
     banner("시작")
     print(f"모드    : {mode}")
     print(f"질문 수 : {len(questions)}턴")
-    print(f"Tool    : {', '.join(t.name for t in session.tools)}")
+    print(f"Tool    : {', '.join(t.name for t in session.settings.tools)}")
     print(f"턴당 최대 스텝: {max_steps or '(.env의 AGENT_MAX_STEPS 또는 기본 10)'}")
 
     for turn, question in enumerate(questions, 1):

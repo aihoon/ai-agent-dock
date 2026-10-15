@@ -7,15 +7,21 @@
 from types import SimpleNamespace
 
 import pytest
-from fakes import FakeLLM, final, tool_call
+from fakes import TEST_CONFIG, FakeLLM, final, tool_call
 
-from ai_agent_dock.core.llm import LLMResponse, Tool, ToolCall
+from ai_agent_dock.core.llm import LLMConfig, LLMRequest, LLMResponse, Tool, ToolCall
 from ai_agent_dock.core.llm import client as llm_client
 from ai_agent_dock.core.llm.providers import anthropic as anthropic_provider
 from ai_agent_dock.core.llm.providers import openai as openai_provider
+from ai_agent_dock.core.runtime.types import AgentSettings
 from ai_agent_dock.core.session import Session
 
 EMPTY_SCHEMA = {"type": "object", "properties": {}}
+
+
+def request(provider="openai"):
+    """대화 이력이 빈 요청. 어댑터는 설정과 이력의 형식만 보므로 모델 이름은 아무거나 쓴다."""
+    return LLMRequest(config=LLMConfig(provider=provider, model="m", max_output_tokens=100), messages=[])
 
 
 class FakeStream:
@@ -71,7 +77,7 @@ def test_openai_stream_forwards_text_deltas_in_order_and_parses_final_response(m
     monkeypatch.setattr(openai_provider, "_client", lambda: client)
     seen = []
 
-    response = openai_provider.call([], [], on_text_delta=seen.append)
+    response = openai_provider.call(request(), on_text_delta=seen.append)
 
     assert seen == ["안", "녕"]  # 글자 조각이 아닌 이벤트는 건너뛴다.
     assert response == openai_provider.parse(openai_response("안녕"))  # 비스트리밍과 같은 형식
@@ -85,7 +91,7 @@ def test_openai_without_callback_uses_create_not_stream(monkeypatch):
     client = SimpleNamespace(responses=SimpleNamespace(create=lambda **kw: openai_response("끝"), stream=forbidden))
     monkeypatch.setattr(openai_provider, "_client", lambda: client)
 
-    assert openai_provider.call([], []).text == "끝"
+    assert openai_provider.call(request()).text == "끝"
 
 
 def test_openai_stream_error_propagates_and_closes_the_stream(monkeypatch):
@@ -94,7 +100,7 @@ def test_openai_stream_error_propagates_and_closes_the_stream(monkeypatch):
     monkeypatch.setattr(openai_provider, "_client", lambda: client)
 
     with pytest.raises(ConnectionError):
-        openai_provider.call([], [], on_text_delta=lambda t: None)
+        openai_provider.call(request(), on_text_delta=lambda t: None)
 
     assert stream.closed
 
@@ -108,7 +114,7 @@ def test_anthropic_stream_forwards_text_deltas_in_order_and_parses_final_message
     monkeypatch.setattr(anthropic_provider, "_client", lambda: client)
     seen = []
 
-    response = anthropic_provider.call([], [], on_text_delta=seen.append)
+    response = anthropic_provider.call(request("anthropic"), on_text_delta=seen.append)
 
     assert seen == ["안", "녕"]
     assert response == anthropic_provider.parse(anthropic_message("안녕"))
@@ -122,7 +128,7 @@ def test_anthropic_without_callback_uses_create_not_stream(monkeypatch):
     client = SimpleNamespace(messages=SimpleNamespace(create=lambda **kw: anthropic_message("끝"), stream=forbidden))
     monkeypatch.setattr(anthropic_provider, "_client", lambda: client)
 
-    assert anthropic_provider.call([], []).text == "끝"
+    assert anthropic_provider.call(request("anthropic")).text == "끝"
 
 
 def test_anthropic_stream_with_tool_use_keeps_complete_tool_call(monkeypatch):
@@ -135,7 +141,7 @@ def test_anthropic_stream_with_tool_use_keeps_complete_tool_call(monkeypatch):
     client = SimpleNamespace(messages=SimpleNamespace(stream=lambda **kw: stream))
     monkeypatch.setattr(anthropic_provider, "_client", lambda: client)
 
-    response = anthropic_provider.call([], [], on_text_delta=lambda t: None)
+    response = anthropic_provider.call(request("anthropic"), on_text_delta=lambda t: None)
 
     assert response.text is None
     assert [(c.id, c.name, c.arguments, c.error) for c in response.tool_calls] == [("c1", "add", {"a": 1}, None)]
@@ -144,17 +150,16 @@ def test_anthropic_stream_with_tool_use_keeps_complete_tool_call(monkeypatch):
 # --- call_llm ---
 
 
-def test_call_llm_passes_callback_to_adapter_only_when_given(monkeypatch):
+def test_call_llm_passes_callback_to_adapter(monkeypatch):
     seen = []
-    adapter = SimpleNamespace(call=lambda *args: seen.append(args) or "응답")
+    adapter = SimpleNamespace(call=lambda req, on_text_delta: seen.append((req.config.provider, on_text_delta)) or "응답")
     monkeypatch.setattr(llm_client, "_provider", lambda name: adapter)
     callback = lambda text: None  # noqa: E731
 
-    llm_client.call_llm([], [], "시스템")
-    llm_client.call_llm([], [], "시스템", on_text_delta=callback)
+    llm_client.call_llm(request(), on_text_delta=callback)
+    llm_client.call_llm(request())
 
-    assert len(seen[0]) == 3  # 콜백이 없으면 기존 호출 모양 그대로
-    assert seen[1][3] is callback
+    assert seen == [("openai", callback), ("openai", None)]
 
 
 # --- Session ---
@@ -168,9 +173,9 @@ def test_session_streams_text_of_every_step_and_keeps_same_history_as_batch():
 
     seen = []
 
-    streamed = Session(tools, llm=script())
+    streamed = Session(AgentSettings(config=TEST_CONFIG, tools=tools, llm=script()))
     result = streamed.ask("확인해", on_text_delta=seen.append)
-    batch = Session(tools, llm=script())
+    batch = Session(AgentSettings(config=TEST_CONFIG, tools=tools, llm=script()))
     batch.ask("확인해")
 
     assert "".join(seen) == "완료했습니다"
@@ -181,7 +186,7 @@ def test_session_streams_text_of_every_step_and_keeps_same_history_as_batch():
 def test_session_streams_text_that_comes_before_a_tool_call():
     """Tool을 부르기 전에 모델이 쓴 설명도 도착하는 대로 전달된다."""
     explain = LLMResponse(text="확인해 볼게요", tool_calls=[ToolCall("c1", "ping", {})])
-    session = Session([Tool("ping", "", EMPTY_SCHEMA, lambda: "pong")], llm=FakeLLM([explain, final("끝")]))
+    session = Session(AgentSettings(config=TEST_CONFIG, tools=[Tool("ping", "", EMPTY_SCHEMA, lambda: "pong")], llm=FakeLLM([explain, final("끝")])))
     seen = []
 
     session.ask("확인해", on_text_delta=seen.append)
@@ -193,11 +198,11 @@ def test_session_rolls_back_when_stream_breaks_midway():
     """스트림이 도중에 끊겨 예외가 나면 그 턴은 이력에 남지 않는다. 이미 전달한 조각은 되돌릴 수 없다."""
     seen = []
 
-    def breaking(history, tools, system_prompt=None, on_text_delta=None):
+    def breaking(request, on_text_delta=None):
         on_text_delta("안")
         raise ConnectionError("스트림 끊김")
 
-    session = Session([], llm=breaking)
+    session = Session(AgentSettings(config=TEST_CONFIG, llm=breaking))
 
     with pytest.raises(ConnectionError):
         session.ask("질문", on_text_delta=seen.append)
@@ -209,7 +214,7 @@ def test_session_rolls_back_when_stream_breaks_midway():
 def test_session_without_callback_does_not_pass_on_text_delta():
     """콜백이 없으면 llm에 on_text_delta 키워드를 넘기지 않는다(기존 llm 함수와 호환)."""
 
-    def old_style(history, tools, system_prompt):
+    def old_style(request):
         return final("답")
 
-    assert Session([], llm=old_style).ask("질문").answer == "답"
+    assert Session(AgentSettings(config=TEST_CONFIG, llm=old_style)).ask("질문").answer == "답"

@@ -9,55 +9,40 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
-from dataclasses import dataclass
 
 from ai_agent_dock.env import env_int
 
-from ..llm import LLMResponse, Message, Tool, ToolCall, call_llm
+from ..llm import AssistantMessage, LLMRequest, Message, Tool, ToolCall, ToolMessage, UserMessage
+from .types import AgentResult, AgentSettings
 
 log = logging.getLogger(__name__)
 
 DEFAULT_MAX_STEPS = 10
 
 
-@dataclass
-class AgentResult:
-    """run_agent의 결과."""
+def run_agent(settings: AgentSettings, question: str, *, history: list[Message] | None = None) -> AgentResult:
+    """턴 하나(질문 하나)를 처리한다. settings.max_steps는 모델을 호출하는 횟수의 상한이다.
 
-    answer: str | None
-    status: str  # "completed"(최종 답변으로 종료) 또는 "max_steps"(최대 스텝 도달로 종료)
-    steps: int  # 모델을 호출한 횟수
-    history: list[Message]
+    settings는 세션 내내 같은 설정이고, 모든 스텝의 요청에 그대로 실린다. history는 이전 턴들의 이력이다.
+    넘긴 목록은 바꾸지 않고 복사해서 쓰며, 이번 턴이 반영된 전체 이력을 결과(AgentResult.history)로 돌려준다.
+    생략하면 빈 이력으로 시작한다(이전 턴을 기억하지 않는다).
 
-
-def run_agent(
-    question: str,
-    tools: list[Tool],
-    *,
-    history: list[Message] | None = None,
-    system_prompt: str | None = None,
-    max_steps: int | None = None,
-    llm: Callable[[list[Message], list[Tool], str | None], LLMResponse] = call_llm,
-) -> AgentResult:
-    """턴 하나(질문 하나)를 처리한다. max_steps는 모델을 호출하는 횟수의 상한이다.
-
-    history는 이전 턴들의 이력이다. 넘긴 목록은 바꾸지 않고 복사해서 쓰며, 이번 턴이 반영된 전체 이력을
-    결과(AgentResult.history)로 돌려준다. 생략하면 빈 이력으로 시작한다(이전 턴을 기억하지 않는다).
-
-    max_steps 우선순위: 인자 > 환경 변수 AGENT_MAX_STEPS > 기본값 10.
+    max_steps 우선순위: settings.max_steps > 환경 변수 AGENT_MAX_STEPS > 기본값 10.
     """
+    max_steps = settings.max_steps
     if max_steps is None:
         max_steps = env_int("AGENT_MAX_STEPS", DEFAULT_MAX_STEPS)
-    tools_by_name = {t.name: t for t in tools}
-    history = [*(history or []), Message(role="user", content=question)]
+    tools_by_name = {t.name: t for t in settings.tools}
+    history = [*(history or []), UserMessage(content=question)]
     answer: str | None = None
 
     for step in range(1, max_steps + 1):
-        response = llm(history, tools, system_prompt)
+        response = settings.llm(
+            LLMRequest(config=settings.config, messages=history, tools=settings.tools, system_prompt=settings.system_prompt)
+        )
         # 응답을 이력에 그대로 이어 붙여야 모델이 다음 호출에서 자신의 이전 판단을 본다.
         history.append(
-            Message(role="assistant", content=response.text, tool_calls=response.tool_calls, raw=response.raw)
+            AssistantMessage(content=response.text, tool_calls=response.tool_calls, raw=response.raw)
         )
         answer = response.text
 
@@ -67,7 +52,7 @@ def run_agent(
 
         for call in response.tool_calls:
             content, is_error = _execute(tools_by_name, call)
-            history.append(Message(role="tool", content=content, tool_call_id=call.id, is_error=is_error))
+            history.append(ToolMessage(tool_call_id=call.id, content=content, is_error=is_error))
 
     # 모델이 끝까지 Tool만 요청했다. 마지막 응답 텍스트(없을 수 있음)와 함께 종료 사유를 알린다.
     log.warning("최대 스텝(%d)에 도달해 종료", max_steps)

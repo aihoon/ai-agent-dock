@@ -12,6 +12,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from ai_agent_dock.core.llm import config_from_env
+from ai_agent_dock.core.runtime.types import AgentSettings
 from ai_agent_dock.core.session import Session
 from ai_agent_dock.core.tools import BUILTIN_TOOLS, DEFAULT_MAX_RESULT_CHARS, ToolRegistry
 from ai_agent_dock.core.tools.mcp import ServerSpec, connect_mcp_servers, load_config
@@ -55,7 +57,7 @@ def main():
             print(f"  {tool.name:<22} [{registry.source_of(tool.name)}]")
 
         print("5) LLM 턴 실행: 모델이 Tool을 고르고, 루프가 실행하고, 결과를 모델에 돌려준다")
-        session = Session(registry.tools())
+        session = Session(AgentSettings(config=config_from_env(), tools=registry.tools()))
         result = session.ask(QUESTION)
         print(f"  상태: {result.status}, 모델 호출: {result.steps}회")
         for message in result.history[1:]:

@@ -4,11 +4,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from ai_agent_dock.core.llm import Message, Tool, ToolCall
+from ai_agent_dock.core.llm import AssistantMessage, LLMConfig, LLMRequest, Tool, ToolCall, ToolMessage, UserMessage
 from ai_agent_dock.core.llm.providers.anthropic import (
     DEFAULT_MAX_TOKENS,
     DEFAULT_MODEL,
     build_request,
+    config_from_env,
     parse,
     to_messages,
     to_tools,
@@ -17,10 +18,10 @@ from ai_agent_dock.core.llm.providers.anthropic import (
 
 def test_consecutive_tool_results_are_merged_into_one_user_message():
     history = [
-        Message("user", "질문"),
-        Message("assistant", None, [ToolCall("a", "x", {}), ToolCall("b", "y", {})]),
-        Message("tool", "결과A", tool_call_id="a"),
-        Message("tool", "고장", tool_call_id="b", is_error=True),
+        UserMessage("질문"),
+        AssistantMessage(None, [ToolCall("a", "x", {}), ToolCall("b", "y", {})]),
+        ToolMessage(tool_call_id="a", content="결과A"),
+        ToolMessage(tool_call_id="b", content="고장", is_error=True),
     ]
 
     messages = to_messages(history)
@@ -38,7 +39,7 @@ def test_consecutive_tool_results_are_merged_into_one_user_message():
 
 def test_assistant_raw_blocks_are_replayed_unchanged():
     thinking = SimpleNamespace(type="thinking")  # 원본 블록은 손대지 않고 그대로 돌려줘야 한다.
-    history = [Message("user", "q"), Message("assistant", "a", [], raw=[thinking])]
+    history = [UserMessage("q"), AssistantMessage("a", [], raw=[thinking])]
 
     assert to_messages(history)[1]["content"] == [thinking]
 
@@ -77,22 +78,36 @@ def test_parse_raises_on_refusal():
         parse(SimpleNamespace(content=[], stop_reason="refusal"))
 
 
-def test_build_request_uses_defaults_when_env_is_unset(monkeypatch):
+def test_config_from_env_uses_defaults_when_env_is_unset(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_MODEL", raising=False)
     monkeypatch.delenv("ANTHROPIC_MAX_TOKENS", raising=False)
 
-    request = build_request([Message("user", "q")], [])
-
-    assert request["model"] == DEFAULT_MODEL
-    assert request["max_tokens"] == DEFAULT_MAX_TOKENS
-    assert "tools" not in request and "system" not in request
+    assert config_from_env() == LLMConfig(provider="anthropic", model=DEFAULT_MODEL, max_output_tokens=DEFAULT_MAX_TOKENS)
 
 
-def test_build_request_reflects_env_settings(monkeypatch):
+def test_config_from_env_reflects_env_settings(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_MODEL", "my-model")
     monkeypatch.setenv("ANTHROPIC_MAX_TOKENS", "2048")
 
-    request = build_request([Message("user", "q")], [], system_prompt="시스템")
+    assert config_from_env() == LLMConfig(provider="anthropic", model="my-model", max_output_tokens=2048)
+
+
+def test_build_request_omits_optional_fields_when_unset():
+    request = build_request(LLMRequest(config=LLMConfig("anthropic", "my-model", 2048), messages=[UserMessage("q")]))
+
+    assert request["model"] == "my-model"
+    assert request["max_tokens"] == 2048
+    assert "tools" not in request and "system" not in request
+
+
+def test_build_request_reflects_request_fields():
+    request = build_request(
+        LLMRequest(
+            config=LLMConfig("anthropic", "my-model", 2048),
+            messages=[UserMessage("q")],
+            system_prompt="시스템",
+        )
+    )
 
     assert request["model"] == "my-model"
     assert request["max_tokens"] == 2048

@@ -6,9 +6,10 @@ import time
 from pathlib import Path
 
 import pytest
-from fakes import FakeLLM, final, tool_call
+from fakes import TEST_CONFIG, FakeLLM, final, tool_call
 
 from ai_agent_dock.core.runtime.loop import run_agent
+from ai_agent_dock.core.runtime.types import AgentSettings
 from ai_agent_dock.core.session import Session
 from ai_agent_dock.core.tools import ToolArgumentError, ToolError, ToolRegistry
 from ai_agent_dock.core.tools.mcp import ServerSpec, connect_mcp_servers
@@ -151,7 +152,7 @@ def test_agent_loop_uses_an_mcp_tool_like_any_other_tool():
         tools = registry_of(connected).tools()
         llm = FakeLLM([tool_call("c1", "test__echo", text="반사"), final("끝")])
 
-        result = run_agent("따라 해", tools, llm=llm)
+        result = run_agent(AgentSettings(config=TEST_CONFIG, tools=tools, llm=llm), "따라 해")
 
     tool_message = next(m for m in result.history if m.role == "tool")
     assert (tool_message.content, tool_message.is_error) == ("반사", False)
@@ -162,7 +163,7 @@ def test_agent_loop_reports_mcp_failures_as_error_observations_and_continues():
         tools = registry_of(connected).tools()
         llm = FakeLLM([tool_call("c1", "test__fail"), final("실패했지만 계속합니다")])
 
-        result = run_agent("실패시켜", tools, llm=llm)
+        result = run_agent(AgentSettings(config=TEST_CONFIG, tools=tools, llm=llm), "실패시켜")
 
     tool_message = next(m for m in result.history if m.role == "tool")
     assert tool_message.is_error and "fail" in tool_message.content
@@ -172,7 +173,7 @@ def test_agent_loop_reports_mcp_failures_as_error_observations_and_continues():
 def test_streaming_works_in_a_turn_that_uses_an_mcp_tool():
     with connect() as connected:
         tools = registry_of(connected).tools()
-        session = Session(tools, llm=FakeLLM([tool_call("c1", "test__echo", text="x"), final("완료했습니다")]))
+        session = Session(AgentSettings(config=TEST_CONFIG, tools=tools, llm=FakeLLM([tool_call("c1", "test__echo", text="x"), final("완료했습니다")])))
         seen = []
 
         session.ask("해 줘", on_text_delta=seen.append)

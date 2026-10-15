@@ -1,10 +1,11 @@
 """Tool 레지스트리 테스트: 이름 중복 거부, 인자 스키마 검증, 결과 길이 제한, 루프와의 연결(루프는 고치지 않았다)."""
 
 import pytest
-from fakes import FakeLLM, final, tool_call
+from fakes import TEST_CONFIG, FakeLLM, final, tool_call
 
 from ai_agent_dock.core.llm import Tool
 from ai_agent_dock.core.runtime.loop import run_agent
+from ai_agent_dock.core.runtime.types import AgentSettings
 from ai_agent_dock.core.tools import BUILTIN_TOOLS, ToolArgumentError, ToolRegistry
 
 ADD_SCHEMA = {
@@ -115,7 +116,7 @@ def test_loop_reports_argument_errors_to_the_model_as_error_observations():
     registry.add(add_tool())
     llm = FakeLLM([tool_call("c1", "add", a="하나"), final("고쳐서 다시 부르겠습니다")])
 
-    result = run_agent("더해 줘", registry.tools(), llm=llm)
+    result = run_agent(AgentSettings(config=TEST_CONFIG, tools=registry.tools(), llm=llm), "더해 줘")
 
     tool_message = next(m for m in result.history if m.role == "tool")
     assert tool_message.is_error

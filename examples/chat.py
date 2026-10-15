@@ -16,17 +16,23 @@ import argparse
 import logging
 from contextlib import ExitStack
 from dataclasses import replace
-from functools import partial
+from pathlib import Path
 
 from dotenv import load_dotenv
 
-from ai_agent_dock.core.llm import Message, Tool, call_llm
+from ai_agent_dock.core.llm import Message, Tool, call_llm, config_from_env
+from ai_agent_dock.core.runtime.types import DEFAULT_SYSTEM_PROMPT, AgentSettings
 from ai_agent_dock.core.session import Session
+from ai_agent_dock.core.skills import SkillMeta, build_index, make_load_skill_tool, read_skill, scan_skills
 from ai_agent_dock.core.tools import BUILTIN_TOOLS, DEFAULT_MAX_RESULT_CHARS, ToolRegistry
 from ai_agent_dock.env import env_bool, env_float, env_int, env_str
 
-HELP = "/exit 종료 | /reset 대화 이력 비우기 | /history 이력 보기 | /tools 사용 중인 Tool 보기 | /help 명령 목록"
+HELP = (
+    "/exit 종료 | /reset 대화 이력 비우기 | /history 이력 보기 | /tools 사용 중인 Tool 보기 | "
+    "/skills 스킬 목록 | /skill 이름 스킬 지침 넣기 | /help 명령 목록"
+)
 SHOW = 80  # /history에서 한 항목을 이만큼만 보여 준다.
+SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"  # 프로젝트 루트의 skills/
 
 
 class Progress:
@@ -57,12 +63,10 @@ class Progress:
         print(message, flush=True)
 
     def wrap_llm(self, llm):
-        def traced(history, tools, system_prompt, on_text_delta=None):
+        def traced(request, on_text_delta=None):
             self.step += 1
             self._say(f"  · 모델 호출 중 (스텝 {self.step})")
-            if on_text_delta is None:
-                return llm(history, tools, system_prompt)
-            return llm(history, tools, system_prompt, on_text_delta=on_text_delta)
+            return llm(request, on_text_delta=on_text_delta)
 
         return traced
 
@@ -113,18 +117,32 @@ def main():
     try:
         # 우선순위: 인자 > 환경 변수 AGENT_STREAM > 기본값(스트리밍)
         stream = args.stream if args.stream is not None else env_bool("AGENT_STREAM", True)
+        config = config_from_env(args.provider)  # 모델 설정은 시작할 때 한 번 만든다.
     except ValueError as e:
         raise SystemExit(f"설정 오류: {e}")
 
     progress = Progress()
-    llm = progress.wrap_llm(partial(call_llm, provider=args.provider))
+    llm = progress.wrap_llm(call_llm)
     with ExitStack() as stack:  # MCP 서버 연결은 프로그램이 끝날 때 이 with가 정리한다.
         try:
             registry = build_registry(args, stack)
-        except ValueError as e:  # 설정 파일 오류, Tool 이름 겹침 등
+            skills = scan_skills(SKILLS_DIR)
+        except ValueError as e:  # 설정 파일 오류, Tool 이름 겹침, 스킬 형식 오류 등
             raise SystemExit(f"설정 오류: {e}")
-        session = Session([progress.wrap_tool(t) for t in registry.tools()], max_steps=args.max_steps, llm=llm)
-        repl(session, registry, progress, stream)
+        if skills:
+            registry.add(make_load_skill_tool(skills), source="skills")
+            print(f"스킬 {len(skills)}개를 찾았습니다.")
+        index = build_index(skills)
+        system_prompt = f"{DEFAULT_SYSTEM_PROMPT}\n\n{index}" if index else DEFAULT_SYSTEM_PROMPT
+        settings = AgentSettings(
+            config=config,
+            tools=[progress.wrap_tool(t) for t in registry.tools()],
+            system_prompt=system_prompt,
+            max_steps=args.max_steps,
+            llm=llm,
+        )
+        session = Session(settings)
+        repl(session, registry, progress, stream, skills)
 
 
 def build_registry(args, stack: ExitStack) -> ToolRegistry:
@@ -151,7 +169,7 @@ def build_registry(args, stack: ExitStack) -> ToolRegistry:
     return registry
 
 
-def repl(session: Session, registry: ToolRegistry, progress: Progress, stream: bool) -> None:
+def repl(session: Session, registry: ToolRegistry, progress: Progress, stream: bool, skills: list[SkillMeta]) -> None:
     print(f"대화를 시작합니다({'스트리밍' if stream else '일괄 응답'}). 명령을 보려면 /help 를 입력하세요.")
     while True:
         try:
@@ -172,9 +190,24 @@ def repl(session: Session, registry: ToolRegistry, progress: Progress, stream: b
                 for m in session.history:
                     print(f"  {brief(m)}")
             elif line == "/tools":
-                print(f"(Tool {len(session.tools)}개, *는 필수 인자)")
-                for t in session.tools:
+                print(f"(Tool {len(session.settings.tools)}개, *는 필수 인자)")
+                for t in session.settings.tools:
                     print(f"  {describe_tool(t, registry.source_of(t.name))}")
+            elif line == "/skills":
+                if not skills:
+                    print("스킬이 없습니다(skills/ 폴더에 SKILL.md를 추가하세요).")
+                for m in skills:
+                    print(f"  {m.name}: {m.description}")
+            elif line == "/skill":
+                print("사용법: /skill 이름 (목록은 /skills)")
+            elif line.startswith("/skill "):
+                name = line[len("/skill ") :].strip()
+                match = next((m for m in skills if m.name == name), None)
+                if match is None:
+                    print(f"없는 스킬: {name!r}. 목록은 /skills 로 보세요.")
+                else:
+                    session.add_user_message(f"다음 스킬의 지침을 따라 이후 답하라: {match.name}\n\n{read_skill(match).body}")
+                    print(f"스킬 '{match.name}'의 지침을 대화에 넣었습니다. 이어서 질문하세요.")
             elif line == "/help":
                 print(HELP)
             else:

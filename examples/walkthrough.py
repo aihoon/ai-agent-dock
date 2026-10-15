@@ -15,8 +15,9 @@ from dataclasses import replace
 
 from dotenv import load_dotenv
 
-from ai_agent_dock.core.llm import LLMResponse, Message, Tool, ToolCall, call_llm
+from ai_agent_dock.core.llm import LLMConfig, LLMResponse, Message, Tool, ToolCall, call_llm, config_from_env
 from ai_agent_dock.core.runtime.loop import run_agent
+from ai_agent_dock.core.runtime.types import AgentSettings
 from ai_agent_dock.core.tools import BUILTIN_TOOLS
 
 SHOW = 200  # 긴 내용은 이만큼만 보여 준다.
@@ -51,7 +52,8 @@ class Tracer:
         self.step = 0
         self._seen = 0  # 이미 보여 준 이력 항목 수
 
-    def llm(self, history, tools, system_prompt):
+    def llm(self, request):
+        history, tools = request.messages, request.tools
         self.step += 1
         banner(f"스텝 {self.step}")
         new = history[self._seen :]
@@ -61,7 +63,7 @@ class Tracer:
             for m in new:
                 print(f"       {describe(m)}")
         print(f"[{self.step}-2] 모델 호출 → 이력 {len(history)}개, Tool {len(tools)}개를 보낸다")
-        response = self._llm(history, tools, system_prompt)
+        response = self._llm(request)
         print(f"[{self.step}-3] 모델 응답:")
         print(f"       텍스트   : {clip(response.text) if response.text else '(없음)'}")
         if response.tool_calls:
@@ -93,7 +95,7 @@ def scripted(*responses):
     items = list(responses)
     state = {"n": 0}
 
-    def llm(history, tools, system_prompt):
+    def llm(request):
         i = min(state["n"], len(items) - 1)
         state["n"] += 1
         return items[i]
@@ -135,10 +137,12 @@ def main():
 
     if args.scenario:
         question, model, scenario_steps = SCENARIOS[args.scenario]
+        config = LLMConfig(provider="scenario", model="scenario", max_output_tokens=None)  # 가짜 모델은 설정을 읽지 않는다.
         mode = f"가짜 모델(시나리오: {args.scenario})"
     else:
         question = " ".join(args.question) or "지금 몇 시야? 그리고 17*23은 얼마야? 두 결과를 한 문장으로 말해 줘."
         model, scenario_steps = call_llm, None
+        config = config_from_env()
         mode = "실제 모델(.env의 LLM_PROVIDER)"
     max_steps = args.max_steps or scenario_steps
 
@@ -152,7 +156,8 @@ def main():
     print(f"Tool      : {', '.join(t.name for t in tools)}")
     print(f"최대 스텝 : {max_steps or '(.env의 AGENT_MAX_STEPS 또는 기본 10)'}")
 
-    result = run_agent(question, tools, system_prompt=SYSTEM_PROMPT, max_steps=max_steps, llm=tracer.llm)
+    settings = AgentSettings(config=config, tools=tools, system_prompt=SYSTEM_PROMPT, max_steps=max_steps, llm=tracer.llm)
+    result = run_agent(settings, question)
 
     banner("결과")
     print(f"종료 사유 : {result.status}  ({'최종 답변으로 종료' if result.status == 'completed' else '최대 스텝에 도달해 강제 종료'})")
