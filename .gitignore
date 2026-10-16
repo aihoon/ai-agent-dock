@@ -33,3 +33,6 @@ sandbox/
 
 # OS
 .DS_Store
+
+# 지식 검색 색인(문서에서 다시 만들 수 있다)
+index.sqlite

@@ -23,6 +23,7 @@ from dotenv import load_dotenv
 from ai_agent_dock.core.llm import Message, Tool, call_llm, config_from_env
 from ai_agent_dock.core.runtime.types import DEFAULT_SYSTEM_PROMPT, AgentSettings
 from ai_agent_dock.core.session import Session
+from ai_agent_dock.core.retrieval import CITATION_RULE, Knowledge, check_citations, make_search_docs_tool, open_knowledge
 from ai_agent_dock.core.skills import SkillMeta, build_index, make_load_skill_tool, read_skill, scan_skills
 from ai_agent_dock.core.tools import BUILTIN_TOOLS, DEFAULT_MAX_RESULT_CHARS, ToolRegistry
 from ai_agent_dock.env import env_bool, env_float, env_int, env_str
@@ -33,6 +34,8 @@ HELP = (
 )
 SHOW = 80  # /history에서 한 항목을 이만큼만 보여 준다.
 SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"  # 프로젝트 루트의 skills/
+KNOWLEDGE_DIR = Path(__file__).resolve().parent.parent / "knowledge"  # 프로젝트 루트의 knowledge/(검색할 문서)
+INDEX_PATH = Path(__file__).resolve().parent.parent / "index.sqlite"  # 문서 색인(문서에서 다시 만들 수 있다)
 
 
 class Progress:
@@ -132,8 +135,20 @@ def main():
         if skills:
             registry.add(make_load_skill_tool(skills), source="skills")
             print(f"스킬 {len(skills)}개를 찾았습니다.")
+        knowledge = None
+        try:
+            knowledge = open_knowledge(INDEX_PATH)
+        except Exception as e:  # 색인 파일이 깨졌거나 열 수 없으면 문서 검색만 끄고 계속한다.
+            print(f"문서 검색을 끕니다: {type(e).__name__}: {e}")
+        if knowledge:
+            registry.add(make_search_docs_tool(knowledge.store, knowledge.seen, calls=knowledge.calls), source="knowledge")
+            print(f"문서 검색을 켰습니다(문서 {knowledge.files}개, 청크 {knowledge.chunks}개).")
+        elif any(KNOWLEDGE_DIR.glob("*.md")):
+            print("문서 색인이 없습니다. uv run python scripts/index_knowledge.py 를 먼저 실행하세요.")
         index = build_index(skills)
         system_prompt = f"{DEFAULT_SYSTEM_PROMPT}\n\n{index}" if index else DEFAULT_SYSTEM_PROMPT
+        if knowledge:
+            system_prompt = f"{system_prompt}\n\n{CITATION_RULE}"
         settings = AgentSettings(
             config=config,
             tools=[progress.wrap_tool(t) for t in registry.tools()],
@@ -142,7 +157,7 @@ def main():
             llm=llm,
         )
         session = Session(settings)
-        repl(session, registry, progress, stream, skills)
+        repl(session, registry, progress, stream, skills, knowledge)
 
 
 def build_registry(args, stack: ExitStack) -> ToolRegistry:
@@ -169,7 +184,23 @@ def build_registry(args, stack: ExitStack) -> ToolRegistry:
     return registry
 
 
-def repl(session: Session, registry: ToolRegistry, progress: Progress, stream: bool, skills: list[SkillMeta]) -> None:
+def report_citations(answer: str | None, seen: set[str], searched: bool) -> None:
+    """답의 출처를 검색 결과와 대조해 지어낸 출처와 출처 누락을 알린다. 이번 턴에 검색했을 때만 누락을 알린다."""
+    check = check_citations(answer or "", seen)
+    if check.unknown:
+        print(f"※ 검색 결과에 없는 출처가 있습니다: {', '.join(check.unknown)}")
+    elif searched and not check.cited:
+        print("※ 문서를 검색했지만 답에 출처가 없습니다.")
+
+
+def repl(
+    session: Session,
+    registry: ToolRegistry,
+    progress: Progress,
+    stream: bool,
+    skills: list[SkillMeta],
+    knowledge: Knowledge | None = None,
+) -> None:
     print(f"대화를 시작합니다({'스트리밍' if stream else '일괄 응답'}). 명령을 보려면 /help 를 입력하세요.")
     while True:
         try:
@@ -184,6 +215,8 @@ def repl(session: Session, registry: ToolRegistry, progress: Progress, stream: b
                 break
             elif line == "/reset":
                 session.reset()
+                if knowledge:
+                    knowledge.seen.clear()  # 이력과 함께 검색 출처도 비운다.
                 print("대화 이력을 비웠습니다.")
             elif line == "/history":
                 print(f"(메시지 {len(session.history)}개)")
@@ -215,6 +248,7 @@ def repl(session: Session, registry: ToolRegistry, progress: Progress, stream: b
             continue
 
         progress.begin_turn()
+        calls_before = len(knowledge.calls) if knowledge else 0
         try:
             result = session.ask(line, on_text_delta=progress.on_text_delta if stream else None)
         except KeyboardInterrupt:  # Ctrl+C는 이 턴만 취소한다. 세션 이력은 이 턴 이전 그대로 남는다.
@@ -228,6 +262,8 @@ def repl(session: Session, registry: ToolRegistry, progress: Progress, stream: b
         progress.end_line()
         if not stream or not result.answer:  # 스트리밍이면 답은 이미 화면에 나왔으므로 다시 출력하지 않는다.
             print(result.answer or "(답변 없음)")
+        if knowledge:
+            report_citations(result.answer, knowledge.seen, len(knowledge.calls) > calls_before)
         if result.status == "max_steps":
             print(f"※ 최대 스텝({result.steps})에 도달해 중단되었습니다. 이어서 '계속해'라고 말해 보세요.")
 

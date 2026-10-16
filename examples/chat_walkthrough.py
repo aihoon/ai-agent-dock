@@ -10,6 +10,7 @@
   uv run python examples/chat_walkthrough.py --scenario mcp        # 모델 없이: MCP 서버의 Tool을 부르는 모습(서버는 실제로 띄움)
   uv run python examples/chat_walkthrough.py --scenario memory --stream   # 모델 없이: 글자 조각이 도착하는 모습(│가 조각 경계)
   uv run python examples/chat_walkthrough.py --scenario skill    # 모델 없이: 스킬 목록에서 본문을 load_skill로 불러 따르는 모습
+  uv run python examples/chat_walkthrough.py --scenario rag      # 모델 없이: 문서를 검색해 출처를 붙여 답하는 모습(임베딩도 가짜)
   uv run python examples/chat_walkthrough.py --stream "17*23은 얼마야?"    # 실제 모델로 스트리밍
   uv run python examples/chat_walkthrough.py "17*23은 얼마야?" "거기에 2를 곱해 줘"   # 실제 모델로 여러 턴
   uv run python examples/chat_walkthrough.py --provider anthropic "안녕" "내가 방금 뭐라고 했지?"
@@ -27,12 +28,14 @@ from dotenv import load_dotenv
 from walkthrough import Tracer, ask, banner, describe, scripted  # C1 워크스루의 도구를 재사용한다.
 
 from ai_agent_dock.core.llm import LLMConfig, LLMResponse, ToolCall, call_llm, config_from_env
+from ai_agent_dock.core.retrieval import HashingEmbedder, KnowledgeIndex, make_search_docs_tool
 from ai_agent_dock.core.runtime.types import AgentSettings
 from ai_agent_dock.core.session import Session
 from ai_agent_dock.core.skills import make_load_skill_tool, scan_skills
 from ai_agent_dock.core.tools import BUILTIN_TOOLS
 
 SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"  # 프로젝트 루트의 skills/
+KNOWLEDGE_DIR = Path(__file__).resolve().parent.parent / "knowledge"  # 프로젝트 루트의 knowledge/
 
 
 class TurnTracer(Tracer):
@@ -122,6 +125,15 @@ SCENARIOS = {
         ),
         2,
     ),
+    # 문서 검색: 가짜 모델이 search_docs를 부르고, 검색 결과의 출처를 붙여 답한다. 임베딩은 네트워크를 쓰지 않는 가짜다.
+    "rag": (
+        ["Tool은 무엇으로 정의하나?"],
+        scripted(
+            LLMResponse(text=None, tool_calls=[ToolCall("c1", "search_docs", {"query": "Tool 정의 인자 스키마"})]),
+            final("Tool은 이름, 설명, 인자 스키마, 실행 함수로 정의합니다 [Tool과 MCP, Tool 정의]."),
+        ),
+        None,
+    ),
     # 스킬 본문은 모델이 load_skill로 불러온다. 가짜 모델이 그 Tool을 먼저 부르고, 본문을 받은 뒤 답한다.
     "skill": (
         ["버그를 찾는 절차대로 점검해 줘"],
@@ -209,6 +221,10 @@ def main():
 
 def build_tools(scenario, tracer, stack):
     """시나리오에 쓸 Tool 목록. mcp 시나리오는 테스트용 MCP 서버(tests/mcp_test_server.py)를 실제로 띄워 그 Tool을 더한다."""
+    if scenario == "rag":
+        index = KnowledgeIndex(":memory:", HashingEmbedder())
+        index.refresh(KNOWLEDGE_DIR)
+        return [tracer.wrap_tool(t) for t in [*BUILTIN_TOOLS, make_search_docs_tool(index, set())]]
     if scenario == "skill":
         skills = make_load_skill_tool(scan_skills(SKILLS_DIR))
         return [tracer.wrap_tool(t) for t in [*BUILTIN_TOOLS, skills]]
