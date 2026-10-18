@@ -94,7 +94,14 @@ def parse(response: Any) -> LLMResponse:
         for b in response.content
         if b.type == "tool_use"
     ]
-    return LLMResponse(text=text, tool_calls=calls, raw=list(response.content))
+    usage = getattr(response, "usage", None)  # 사용량이 없는 응답도 있으니 없으면 None으로 둔다.
+    return LLMResponse(
+        text=text,
+        tool_calls=calls,
+        raw=list(response.content),
+        input_tokens=usage.input_tokens if usage else None,
+        output_tokens=usage.output_tokens if usage else None,
+    )
 
 
 def config_from_env() -> LLMConfig:

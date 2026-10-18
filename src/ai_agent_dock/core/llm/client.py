@@ -13,6 +13,7 @@ from types import ModuleType
 
 from ai_agent_dock.env import env_str
 
+from .tokens import fill_tokens
 from .types import LLMConfig, LLMRequest, LLMResponse
 
 # 제공자 이름 → 어댑터 모듈. 새 제공자는 providers/ 에 어댑터를 만들고 여기에 한 줄 추가한다.
@@ -44,4 +45,5 @@ def call_llm(request: LLMRequest, on_text_delta: Callable[[str], None] | None = 
     on_text_delta를 주면 스트리밍으로 받으며, 답의 글자 조각이 도착할 때마다 호출한다(Tool 인자 조각은 전달하지 않는다).
     반환값은 스트리밍 여부와 관계없이 같은 형식의 LLMResponse다. 스트리밍 여부를 어떻게 정할지는 호출하는 쪽의 몫이다.
     """
-    return _provider(request.config.provider).call(request, on_text_delta)
+    response = _provider(request.config.provider).call(request, on_text_delta)
+    return fill_tokens(request, response)  # 제공자가 토큰 수를 주지 않았으면 tiktoken으로 채운다.

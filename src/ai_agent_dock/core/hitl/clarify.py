@@ -13,7 +13,11 @@ def make_ask_user_tool(input_fn: Callable[[str], str] = input) -> Tool:
 
     return Tool(
         name="ask_user",
-        description="정보가 부족해서 추측할 수 없을 때 사용자에게 질문하고 답을 받는다.",
+        description=(
+            "정보가 부족해서 추측할 수 없을 때 사용자에게 질문하고 답을 받는다. "
+            "무엇을, 어디에, 어떤 내용으로 할지 같은 필요한 정보가 빠졌으면 답 문장으로 묻고 끝내지 말고 이 툴로 묻는다. "
+            "질문은 한 번에 하나만 짧게 한다."
+        ),
         parameters={
             "type": "object",
             "properties": {"question": {"type": "string", "description": "사용자에게 할 질문"}},

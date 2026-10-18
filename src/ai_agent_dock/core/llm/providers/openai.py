@@ -98,10 +98,13 @@ def parse(response: Any) -> LLMResponse:
         except ValueError as e:  # JSONDecodeError도 ValueError의 하위 클래스다.
             args, error = {}, error or f"잘못된 Tool 인자: {e}"
         calls.append(ToolCall(id=item.call_id, name=item.name, arguments=args, error=error))
+    usage = getattr(response, "usage", None)  # 사용량이 없는 응답도 있으니 없으면 None으로 둔다.
     return LLMResponse(
         text=response.output_text or None,
         tool_calls=calls,
         raw=list(response.output),
+        input_tokens=usage.input_tokens if usage else None,
+        output_tokens=usage.output_tokens if usage else None,
     )
 
 

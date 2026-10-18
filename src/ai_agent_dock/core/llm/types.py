@@ -88,3 +88,8 @@ class LLMResponse:
     tool_calls: list[ToolCall] = field(default_factory=list)
     # 제공자 원본 항목. OpenAI의 추론 항목처럼 다음 호출에 그대로 돌려줘야 하는 데이터를 보관한다.
     raw: list[Any] = field(default_factory=list)
+    # 토큰 수. 제공자 응답의 값을 쓰고, 없으면 tiktoken으로 계산한다(call_llm이 채운다). 출처는 provider 또는 tiktoken이다.
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    input_tokens_source: str | None = None
+    output_tokens_source: str | None = None

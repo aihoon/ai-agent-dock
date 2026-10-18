@@ -13,7 +13,11 @@ dependencies = [
     "mcp>=2.3.0",
     "openai>=3.24.0",
     "python-dotenv>=1.2.4",
+    "tiktoken>=0.14.0",
 ]
+
+[project.scripts]
+evals = "ai_agent_dock.evals_cli:main"  # uv run evals: 실제 모델 평가(uv run pytest --live와 같다)
 
 [build-system]
 requires = ["uv_build>=0.12.5,<0.13.0"]

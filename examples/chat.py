@@ -22,6 +22,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from ai_agent_dock.core.llm import Message, Tool, call_llm, config_from_env
+from ai_agent_dock.core.observability import Tracer
 from ai_agent_dock.core.runtime.prompt import build_system_prompt
 from ai_agent_dock.core.runtime.types import AgentSettings
 from ai_agent_dock.core.session import Session
@@ -33,6 +34,7 @@ from ai_agent_dock.core.tools import DEFAULT_MAX_RESULT_CHARS, ToolRegistry
 from ai_agent_dock.env import env_bool, env_float, env_int, env_str
 
 AUDIT_PATH = Path(__file__).resolve().parent.parent / "logs" / "audit.jsonl"  # 실행 기록(감사 로그). logs/는 git에서 제외한다.
+TRACE_DIR = Path(__file__).resolve().parent.parent / "logs" / "sessions"  # 추적 기록(세션별 파일). TRACE_ENABLED=false면 쓰지 않는다.
 HELP = (
     "/exit 종료 | /reset 대화 이력 비우기 | /history 이력 보기 | /tools 사용 중인 Tool 보기 | "
     "/skills 스킬 목록 | /skill 이름 스킬 지침 넣기 | /help 명령 목록"
@@ -161,6 +163,7 @@ def main():
             llm=llm,
             approve=lambda call: ask_in_terminal(call, interactive=sys.stdin.isatty()),
             audit=audit,
+            tracer=Tracer(TRACE_DIR if env_bool("TRACE_ENABLED", True) else None),
         )
         session = Session(settings)
         repl(session, registry, progress, stream, skills, knowledge, audit)

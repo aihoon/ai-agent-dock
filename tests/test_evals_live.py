@@ -1,0 +1,90 @@
+"""실제 모델 평가: evals/cases.jsonl의 케이스를 실제 모델로 실행한다. uv run pytest --live 또는 uv run evals로만 실행된다.
+
+툴 집합은 채팅과 같다(빌트인, 스킬, 문서 검색, mcp.json의 MCP 서버). 승인과 되묻기는 케이스에 적힌 답을 쓴다.
+결과는 data/evals/실행번호.json, 추적은 logs/sessions/eval-실행번호.jsonl에 남는다.
+"""
+
+from contextlib import ExitStack
+from pathlib import Path
+
+import pytest
+from dotenv import load_dotenv
+
+from ai_agent_dock.core.evals import evaluate, last_passed, load_cases, regressions, save_run, scripted_approver, scripted_input, summarize
+from ai_agent_dock.core.llm import config_from_env
+from ai_agent_dock.core.observability import Tracer, new_session_id
+from ai_agent_dock.core.retrieval import open_knowledge
+from ai_agent_dock.core.runtime.prompt import build_system_prompt
+from ai_agent_dock.core.runtime.types import AgentSettings
+from ai_agent_dock.core.skills import scan_skills
+from ai_agent_dock.core.toolkit import make_builtin_tools
+from ai_agent_dock.core.tools import DEFAULT_MAX_RESULT_CHARS, ToolRegistry
+from ai_agent_dock.env import env_bool, env_float, env_int, env_str
+
+ROOT = Path(__file__).resolve().parent.parent
+
+pytestmark = pytest.mark.live
+
+
+def connect_mcp(stack: ExitStack) -> dict:
+    """mcp.json(또는 MCP_CONFIG)에 적은 서버에 연결한다. 설정 파일이 없으면 MCP 툴 없이 평가한다."""
+    path = Path(env_str("MCP_CONFIG", "") or ROOT / "mcp.json")
+    if not path.is_file():
+        return {}
+    from ai_agent_dock.core.tools.mcp import connect_mcp_servers, load_config
+
+    return stack.enter_context(
+        connect_mcp_servers(
+            load_config(path),
+            call_timeout=env_float("MCP_TOOL_TIMEOUT", 30.0),
+            start_timeout=env_float("MCP_START_TIMEOUT", 60.0),
+        )
+    )
+
+
+def test_cases_with_real_model(request):
+    load_dotenv(ROOT / ".env")
+    repeat = request.config.getoption("--repeat")
+    config = config_from_env(request.config.getoption("--provider"))
+    cases = load_cases(ROOT / "evals" / "cases.jsonl")
+    skills = scan_skills(ROOT / "skills")
+    knowledge = open_knowledge(ROOT / "data" / "index.sqlite")
+    system_prompt = build_system_prompt(skills=skills, cite_docs=knowledge is not None)
+    run_id = new_session_id("eval-")
+    tracer = Tracer(ROOT / "logs" / "sessions" if env_bool("TRACE_ENABLED", True) else None, session_id=run_id)
+
+    with ExitStack() as stack:
+        mcp_tools = connect_mcp(stack)
+
+        def make_settings(case):
+            registry = ToolRegistry(max_result_chars=env_int("TOOL_RESULT_MAX_CHARS", DEFAULT_MAX_RESULT_CHARS))
+            for source, tool in make_builtin_tools(skills=skills, knowledge=knowledge, input_fn=scripted_input(case.user_inputs)):
+                registry.add(tool, source=source)
+            for server, tools in mcp_tools.items():
+                registry.add_all(tools, source=f"mcp:{server}")
+            return AgentSettings(
+                config=config,
+                tools=registry.tools(),
+                system_prompt=system_prompt,
+                approve=scripted_approver(case.approvals),
+                tracer=tracer,
+            )
+
+        first = make_settings(cases[0])
+        tracer.record(
+            "session_start",
+            None,
+            system_prompt=system_prompt,
+            tools=[{"name": t.name, "description": t.description, "parameters": t.parameters} for t in first.tools],
+            model=config.model,
+            max_steps=first.max_steps,
+        )
+        results = [evaluate(case, make_settings, repeat) for case in cases]
+
+    results_dir = ROOT / "data" / "evals"
+    previous = last_passed(results_dir)  # 저장하기 전에 직전 실행을 읽는다.
+    regressed = regressions(previous or set(), {r.id for r in results if not r.passed})
+    path = save_run(results_dir, run_id, config.provider, config.model, repeat, results)
+    summary = summarize(results, regressed)
+    print(f"\n[평가 {run_id}] {config.provider}/{config.model}, 반복 {repeat}회\n{summary}\n결과 파일: {path}")
+    assert all(r.passed for r in results), summary

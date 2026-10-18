@@ -10,7 +10,8 @@ from dataclasses import dataclass, field
 
 from ..hitl import Approval, AuditLog
 from ..llm import LLMConfig, LLMRequest, LLMResponse, Message, Tool, ToolCall, call_llm
-from .prompt import DEFAULT_SYSTEM_PROMPT  # 기존 import 경로(runtime.types, session)를 위해 여기서도 쓸 수 있게 둔다.
+from ..observability import Tracer
+from .prompt import DEFAULT_SYSTEM_PROMPT  # AgentSettings.system_prompt의 기본값. 가져다 쓸 때는 runtime.prompt에서 가져온다.
 
 
 
@@ -35,3 +36,4 @@ class AgentSettings:
     llm: Callable[[LLMRequest], LLMResponse] = call_llm  # 모델 호출 함수. 테스트에서는 가짜 모델을 넣는다.
     approve: Callable[[ToolCall], Approval] | None = None  # 높음 등급 Tool을 실행하기 전에 묻는 함수. None이면 묻지 않는다.
     audit: AuditLog | None = None  # 실행 기록(감사 로그). None이면 기록하지 않는다.
+    tracer: Tracer | None = None  # 추적 기록(세션 설정, 턴, 스텝, LLM 호출, Tool 실행). None이면 기록하지 않는다.

@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 from fakes import TEST_CONFIG, FakeLLM, final, tool_call
 
+from ai_agent_dock.core.llm.types import LLMResponse
 from ai_agent_dock.core.llm import LLMConfig, LLMRequest, LLMResponse, Tool, ToolCall
 from ai_agent_dock.core.llm import client as llm_client
 from ai_agent_dock.core.llm.providers import anthropic as anthropic_provider
@@ -152,7 +153,7 @@ def test_anthropic_stream_with_tool_use_keeps_complete_tool_call(monkeypatch):
 
 def test_call_llm_passes_callback_to_adapter(monkeypatch):
     seen = []
-    adapter = SimpleNamespace(call=lambda req, on_text_delta: seen.append((req.config.provider, on_text_delta)) or "응답")
+    adapter = SimpleNamespace(call=lambda req, on_text_delta: seen.append((req.config.provider, on_text_delta)) or LLMResponse(text="응답"))
     monkeypatch.setattr(llm_client, "_provider", lambda name: adapter)
     callback = lambda text: None  # noqa: E731
 

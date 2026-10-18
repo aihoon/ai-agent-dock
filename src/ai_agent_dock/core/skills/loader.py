@@ -56,7 +56,10 @@ def make_load_skill_tool(metas: list[SkillMeta]) -> Tool:
 
     return Tool(
         name="load_skill",
-        description="스킬 목록에 있는 이름의 스킬 본문(절차와 지침)을 불러온다.",
+        description=(
+            "스킬 목록에 있는 이름의 스킬 본문(절차와 지침)을 불러온다. "
+            "스킬 목록에 있는 작업을 요청받으면, 직접 답하기 전에 이 툴로 그 스킬의 본문을 불러와 정해진 형식과 절차를 따른다."
+        ),
         parameters={
             "type": "object",
             "properties": {"name": {"type": "string", "description": "스킬 목록에 있는 이름"}},

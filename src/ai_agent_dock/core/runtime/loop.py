@@ -9,15 +9,23 @@
 from __future__ import annotations
 
 import logging
+import time
 
 from ai_agent_dock.env import env_int
 
 from ..llm import AssistantMessage, LLMRequest, Message, Tool, ToolCall, ToolMessage, UserMessage
+from ..observability import Tracer
 from .types import AgentResult, AgentSettings
 
 log = logging.getLogger(__name__)
 
 DEFAULT_MAX_STEPS = 10
+
+# 실행하지 않은 Tool의 관찰 문장 앞부분. 평가(core/evals)가 "실행했다 실패한 Tool"과 구분할 때 쓴다.
+BLOCKED = "이 턴에서 사용자가"
+DENIED = "사용자가 실행을 거부했다."
+REVISED = "사용자가 다르게 요청했다:"
+NOT_RUN_PREFIXES = (BLOCKED, DENIED, REVISED)
 
 
 def run_agent(settings: AgentSettings, question: str, *, history: list[Message] | None = None) -> AgentResult:
@@ -36,11 +44,29 @@ def run_agent(settings: AgentSettings, question: str, *, history: list[Message] 
     history = [*(history or []), UserMessage(content=question)]
     answer: str | None = None
     denied: set[str] = set()  # 이번 턴에서 사용자가 거부한 Tool 이름. 같은 턴에서는 다시 묻지 않는다.
+    tracer = settings.tracer
+    turn_started = time.perf_counter()
+    if tracer is not None:
+        tracer.begin_turn()
+        tracer.record("turn_start", None, question=question)
 
     for step in range(1, max_steps + 1):
+        started = time.perf_counter()
         response = settings.llm(
             LLMRequest(config=settings.config, messages=history, tools=settings.tools, system_prompt=settings.system_prompt)
         )
+        if tracer is not None:
+            tracer.record(
+                "llm",
+                step,
+                _ms_since(started),
+                text=response.text,
+                tool_calls=[{"name": c.name, "arguments": c.arguments} for c in response.tool_calls],
+                input_tokens=response.input_tokens,
+                input_tokens_source=response.input_tokens_source,
+                output_tokens=response.output_tokens,
+                output_tokens_source=response.output_tokens_source,
+            )
         # 응답을 이력에 그대로 이어 붙여야 모델이 다음 호출에서 자신의 이전 판단을 본다.
         history.append(
             AssistantMessage(content=response.text, tool_calls=response.tool_calls, raw=response.raw)
@@ -49,15 +75,37 @@ def run_agent(settings: AgentSettings, question: str, *, history: list[Message] 
 
         if not response.tool_calls:
             log.info("step %d: 최종 답변", step)
-            return AgentResult(answer=answer, status="completed", steps=step, history=history)
+            return _finish(tracer, turn_started, AgentResult(answer=answer, status="completed", steps=step, history=history))
 
         for call in response.tool_calls:
+            started = time.perf_counter()
             content, is_error = _run_call(settings, tools_by_name, call, denied)
+            if tracer is not None:
+                tracer.record(
+                    "tool",
+                    step,
+                    _ms_since(started),
+                    name=call.name,
+                    arguments=call.arguments,
+                    result=content,
+                    is_error=is_error,
+                )
             history.append(ToolMessage(tool_call_id=call.id, content=content, is_error=is_error))
 
     # 모델이 끝까지 Tool만 요청했다. 마지막 응답 텍스트(없을 수 있음)와 함께 종료 사유를 알린다.
     log.warning("최대 스텝(%d)에 도달해 종료", max_steps)
-    return AgentResult(answer=answer, status="max_steps", steps=max_steps, history=history)
+    return _finish(tracer, turn_started, AgentResult(answer=answer, status="max_steps", steps=max_steps, history=history))
+
+
+def _ms_since(started: float) -> float:
+    return (time.perf_counter() - started) * 1000
+
+
+def _finish(tracer: Tracer | None, turn_started: float, result: AgentResult) -> AgentResult:
+    """턴 끝 줄(턴 전체 걸린 시간 포함)을 쓰고 결과를 돌려준다. 추적을 끈 경우에도 결과는 그대로 돌려준다."""
+    if tracer is not None:
+        tracer.record("turn_end", result.steps, _ms_since(turn_started), answer=result.answer, status=result.status)
+    return result
 
 
 def _run_call(
@@ -72,16 +120,16 @@ def _run_call(
     decision = "auto"
     if needs_approval and call.name in denied:
         decision = "blocked"
-        content, is_error = f"이 턴에서 사용자가 {call.name} 실행을 이미 거부했다. 같은 요청을 다시 하지 말고 거부된 사실을 사용자에게 알려라.", True
+        content, is_error = f"{BLOCKED} {call.name} 실행을 이미 거부했다. 같은 요청을 다시 하지 말고 거부된 사실을 사용자에게 알려라.", True
     elif settings.approve is not None and needs_approval:
         approval = settings.approve(call)
         decision = approval.kind
         if approval.kind == "deny":
             denied.add(call.name)
             reason = f" 이유: {approval.reason}" if approval.reason else ""
-            content, is_error = f"사용자가 실행을 거부했다.{reason}", True
+            content, is_error = f"{DENIED}{reason}", True
         elif approval.kind == "revise":
-            content, is_error = f"사용자가 다르게 요청했다: {approval.reason}", True
+            content, is_error = f"{REVISED} {approval.reason}", True
         else:
             content, is_error = _execute(tools_by_name, call)
     else:

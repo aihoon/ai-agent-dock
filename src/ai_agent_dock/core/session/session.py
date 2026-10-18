@@ -11,7 +11,8 @@ from functools import partial
 
 from ..llm import Message, UserMessage
 from ..runtime.loop import run_agent
-from ..runtime.types import DEFAULT_SYSTEM_PROMPT, AgentResult, AgentSettings
+from ..runtime.prompt import DEFAULT_SYSTEM_PROMPT
+from ..runtime.types import AgentResult, AgentSettings
 
 __all__ = ["DEFAULT_SYSTEM_PROMPT", "Session"]  # DEFAULT_SYSTEM_PROMPT는 기존 import 경로를 위해 여기서도 내보낸다.
 
@@ -22,6 +23,15 @@ class Session:
     def __init__(self, settings: AgentSettings):
         self.settings = settings  # 모든 턴이 같은 설정(모델, Tool, 지침, 최대 스텝)을 쓴다.
         self.history: list[Message] = []
+        if settings.tracer is not None:  # 세션 설정은 세션을 시작할 때 한 번만 기록한다(D18).
+            settings.tracer.record(
+                "session_start",
+                None,
+                system_prompt=settings.system_prompt,
+                tools=[{"name": t.name, "description": t.description, "parameters": t.parameters} for t in settings.tools],
+                model=settings.config.model,
+                max_steps=settings.max_steps,
+            )
 
     def ask(self, question: str, on_text_delta: Callable[[str], None] | None = None) -> AgentResult:
         """턴 하나를 처리한다. 모델 호출이 예외로 실패하면 예외가 그대로 전달되고 이력은 바뀌지 않는다.

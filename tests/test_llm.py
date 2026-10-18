@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from ai_agent_dock.core.llm.types import LLMResponse
 from ai_agent_dock.core.llm import LLMConfig, LLMRequest
 from ai_agent_dock.core.llm import client as llm_client
 
@@ -38,10 +39,10 @@ def test_registered_providers_load_once_and_expose_call_and_config(name):
 
 def test_call_llm_dispatches_by_config_provider(monkeypatch):
     seen = []
-    fake = SimpleNamespace(call=lambda req, on_text_delta: seen.append(req.config.model) or "응답")
+    fake = SimpleNamespace(call=lambda req, on_text_delta: seen.append(req.config.model) or LLMResponse(text="응답"))
     monkeypatch.setattr(llm_client, "_provider", lambda name: seen.append(name) or fake)
 
-    assert llm_client.call_llm(request("anthropic")) == "응답"
+    assert llm_client.call_llm(request("anthropic")).text == "응답"
     assert seen == ["anthropic", "m"]
 
 
