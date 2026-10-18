@@ -49,18 +49,22 @@ def get_current_time() -> str:
 BUILTIN_TOOLS = [
     Tool(
         name="get_current_time",
-        description="현재 날짜와 시각을 ISO 형식으로 돌려준다.",
+        description="현재 날짜와 시각을 ISO 형식으로 돌려준다. 오늘 날짜나 지금 시각을 묻는 질문은 추측하지 말고 이 툴로 확인한다.",
         parameters={"type": "object", "properties": {}},
+        read_only=True,
+        trusted=True,
         func=get_current_time,
     ),
     Tool(
         name="calculate",
-        description="수식을 계산한다. 숫자와 + - * / ** 만 사용할 수 있다.",
+        description="숫자 수식을 계산한다. 사칙연산과 ** 같은 간단한 계산은 이 툴을 사용하고 추측하지 않는다. 숫자와 + - * / ** 만 사용할 수 있다.",
         parameters={
             "type": "object",
             "properties": {"expression": {"type": "string", "description": "예: 17*23"}},
             "required": ["expression"],
         },
+        read_only=True,
+        trusted=True,
         func=calculate,
     ),
 ]

@@ -2,11 +2,21 @@
   "servers": {
     "time": {
       "command": "uvx",
-      "args": ["mcp-server-time"]
+      "args": [
+        "mcp-server-time"
+      ],
+      "trusted": true,
+      "enabled": true
     },
     "files": {
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "sandbox"]
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "data/sandbox"
+      ],
+      "trusted": false,
+      "enabled": true
     }
   }
 }

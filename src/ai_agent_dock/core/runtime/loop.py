@@ -35,6 +35,7 @@ def run_agent(settings: AgentSettings, question: str, *, history: list[Message] 
     tools_by_name = {t.name: t for t in settings.tools}
     history = [*(history or []), UserMessage(content=question)]
     answer: str | None = None
+    denied: set[str] = set()  # 이번 턴에서 사용자가 거부한 Tool 이름. 같은 턴에서는 다시 묻지 않는다.
 
     for step in range(1, max_steps + 1):
         response = settings.llm(
@@ -51,12 +52,50 @@ def run_agent(settings: AgentSettings, question: str, *, history: list[Message] 
             return AgentResult(answer=answer, status="completed", steps=step, history=history)
 
         for call in response.tool_calls:
-            content, is_error = _execute(tools_by_name, call)
+            content, is_error = _run_call(settings, tools_by_name, call, denied)
             history.append(ToolMessage(tool_call_id=call.id, content=content, is_error=is_error))
 
     # 모델이 끝까지 Tool만 요청했다. 마지막 응답 텍스트(없을 수 있음)와 함께 종료 사유를 알린다.
     log.warning("최대 스텝(%d)에 도달해 종료", max_steps)
     return AgentResult(answer=answer, status="max_steps", steps=max_steps, history=history)
+
+
+def _run_call(
+    settings: AgentSettings, tools_by_name: dict[str, Tool], call: ToolCall, denied: set[str]
+) -> tuple[str, bool]:
+    """Tool 하나를 실행하기 전에, 읽기 전용이 아니면 승인을 받는다. 거부하면 실행하지 않고 그 사실을 관찰로 돌려준다.
+
+    이번 턴에서 거부된 Tool은 승인을 다시 묻지 않고 막는다(denied에 이름을 모은다).
+    """
+    tool = tools_by_name.get(call.name)
+    needs_approval = tool is not None and not (tool.read_only and tool.trusted)
+    decision = "auto"
+    if needs_approval and call.name in denied:
+        decision = "blocked"
+        content, is_error = f"이 턴에서 사용자가 {call.name} 실행을 이미 거부했다. 같은 요청을 다시 하지 말고 거부된 사실을 사용자에게 알려라.", True
+    elif settings.approve is not None and needs_approval:
+        approval = settings.approve(call)
+        decision = approval.kind
+        if approval.kind == "deny":
+            denied.add(call.name)
+            reason = f" 이유: {approval.reason}" if approval.reason else ""
+            content, is_error = f"사용자가 실행을 거부했다.{reason}", True
+        elif approval.kind == "revise":
+            content, is_error = f"사용자가 다르게 요청했다: {approval.reason}", True
+        else:
+            content, is_error = _execute(tools_by_name, call)
+    else:
+        content, is_error = _execute(tools_by_name, call)
+    if settings.audit is not None:
+        settings.audit.record(
+            tool=call.name,
+            risk="high" if needs_approval else "low",
+            decision=decision,
+            arguments=call.arguments,
+            result_chars=len(content),
+            is_error=is_error,
+        )
+    return content, is_error
 
 
 def _execute(tools_by_name: dict[str, Tool], call: ToolCall) -> tuple[str, bool]:

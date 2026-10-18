@@ -33,5 +33,7 @@ def make_search_docs_tool(
             "properties": {"query": {"type": "string", "description": "찾을 내용을 짧게 적은 검색어"}},
             "required": ["query"],
         },
+        read_only=True,
+        trusted=True,
         func=search_docs,
     )

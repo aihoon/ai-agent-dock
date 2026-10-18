@@ -27,7 +27,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 from walkthrough import Tracer, ask, banner, describe, scripted  # C1 워크스루의 도구를 재사용한다.
 
-from ai_agent_dock.core.llm import LLMConfig, LLMResponse, ToolCall, call_llm, config_from_env
+from ai_agent_dock.core.hitl import Approval
+from ai_agent_dock.core.llm import LLMConfig, LLMResponse, Tool, ToolCall, call_llm, config_from_env
 from ai_agent_dock.core.retrieval import HashingEmbedder, KnowledgeIndex, make_search_docs_tool
 from ai_agent_dock.core.runtime.types import AgentSettings
 from ai_agent_dock.core.session import Session
@@ -125,6 +126,17 @@ SCENARIOS = {
         ),
         2,
     ),
+    # 승인 게이트: 쓰기 Tool은 실행 전에 승인을 받는다. 가짜 승인자가 첫 번째는 승인하고, 두 번째는 거부한다.
+    "hitl": (
+        ["notes.md에 메모를 써 줘", "그 파일을 다른 내용으로 고쳐 줘"],
+        scripted(
+            LLMResponse(text=None, tool_calls=[ToolCall("c1", "files__write_file", {"path": "notes.md", "content": "안녕"})]),
+            final("notes.md에 저장했습니다."),
+            LLMResponse(text=None, tool_calls=[ToolCall("c2", "files__write_file", {"path": "notes.md", "content": "바뀐 내용"})]),
+            final("거부되어 저장하지 않았습니다."),
+        ),
+        None,
+    ),
     # 문서 검색: 가짜 모델이 search_docs를 부르고, 검색 결과의 출처를 붙여 답한다. 임베딩은 네트워크를 쓰지 않는 가짜다.
     "rag": (
         ["Tool은 무엇으로 정의하나?"],
@@ -165,6 +177,34 @@ def show_history(session, title):
     print(f"\n[{title}] 세션 이력 {len(session.history)}개")
     for i, m in enumerate(session.history, 1):
         print(f"   {i:2d}. {describe(m)}")
+
+
+def scripted_approver(*decisions):
+    """미리 정한 결정을 차례로 돌려주는 가짜 승인자. 실제 메뉴 대신 결정을 출력한다."""
+    items = list(decisions)
+
+    def approve(call):
+        decision = items.pop(0)
+        suffix = f" ({decision.reason})" if decision.reason else ""
+        print(f"  · 승인 요청: {call.name} → 사용자 결정: {decision.kind}{suffix}")
+        return decision
+
+    return approve
+
+
+def hitl_write_tool(tracer):
+    """워크스루용 가짜 쓰기 Tool. 실제로는 아무 파일도 쓰지 않고 호출만 보여 준다."""
+
+    def write(**arguments):
+        print(f"       → 파일 기록(가짜): {arguments}")
+        return f"{arguments.get('path')}에 기록함"
+
+    schema = {
+        "type": "object",
+        "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
+        "required": ["path", "content"],
+    }
+    return tracer.wrap_tool(Tool("files__write_file", "파일을 쓴다(워크스루용 가짜, 실제로 쓰지 않는다)", schema, write))
 
 
 def main():
@@ -214,13 +254,16 @@ def main():
 
     tracer = TurnTracer(call_model)
     with ExitStack() as stack:  # mcp 시나리오가 띄운 MCP 서버는 이 with가 끝날 때 정리된다.
-        settings = AgentSettings(config=config, tools=build_tools(args.scenario, tracer, stack), max_steps=max_steps, llm=tracer.llm)
+        approve = scripted_approver(Approval.approve(), Approval.deny("경로가 틀렸다")) if args.scenario == "hitl" else None
+        settings = AgentSettings(config=config, tools=build_tools(args.scenario, tracer, stack), max_steps=max_steps, llm=tracer.llm, approve=approve)
         session = Session(settings)
         walk(session, tracer, questions, turn_models, holder, delta, mode, max_steps)
 
 
 def build_tools(scenario, tracer, stack):
     """시나리오에 쓸 Tool 목록. mcp 시나리오는 테스트용 MCP 서버(tests/mcp_test_server.py)를 실제로 띄워 그 Tool을 더한다."""
+    if scenario == "hitl":
+        return [hitl_write_tool(tracer)]
     if scenario == "rag":
         index = KnowledgeIndex(":memory:", HashingEmbedder())
         index.refresh(KNOWLEDGE_DIR)

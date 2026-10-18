@@ -8,14 +8,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from ..llm import LLMConfig, LLMRequest, LLMResponse, Message, Tool, call_llm
+from ..hitl import Approval, AuditLog
+from ..llm import LLMConfig, LLMRequest, LLMResponse, Message, Tool, ToolCall, call_llm
+from .prompt import DEFAULT_SYSTEM_PROMPT  # 기존 import 경로(runtime.types, session)를 위해 여기서도 쓸 수 있게 둔다.
 
-# 일반 대화형 어시스턴트의 최소 기본 지침. 인자로 덮어쓸 수 있고, 이력에는 넣지 않고 호출마다 따로 전달한다.
-DEFAULT_SYSTEM_PROMPT = (
-    "당신은 도움이 되는 어시스턴트다. 사용자의 언어로 답한다. "
-    "모르거나 확인할 수 없는 것은 지어내지 말고 모른다고 답한다. "
-    "계산, 시간 조회처럼 Tool로 확인할 수 있는 것은 추측하지 말고 Tool을 사용한다."
-)
 
 
 @dataclass
@@ -37,3 +33,5 @@ class AgentSettings:
     system_prompt: str | None = DEFAULT_SYSTEM_PROMPT
     max_steps: int | None = None  # 한 턴에서 모델을 호출하는 횟수 상한. None이면 환경 변수, 없으면 기본값
     llm: Callable[[LLMRequest], LLMResponse] = call_llm  # 모델 호출 함수. 테스트에서는 가짜 모델을 넣는다.
+    approve: Callable[[ToolCall], Approval] | None = None  # 높음 등급 Tool을 실행하기 전에 묻는 함수. None이면 묻지 않는다.
+    audit: AuditLog | None = None  # 실행 기록(감사 로그). None이면 기록하지 않는다.

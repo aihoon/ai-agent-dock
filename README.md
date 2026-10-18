@@ -4,7 +4,7 @@
 Tool 호출, 스킬, 세션 기반 대화를 갖춘 플랫폼을 만들고, 그 위에 스킬·플러그인을 설치하거나 코드 워크플로를 얹어 **애플리케이션**을 만든다.
 
 ## 현재 단계
-C6 완료(문서 검색: `knowledge/` 문서를 임베딩해 색인하고 `search_docs` Tool로 찾아 출처와 함께 답한다). 태그: `c0`, `c1`, `c1.1`, `c2`, `c3`, `c4`, `c5`, `c6`(커밋 후 태그).
+C7 완료(사람 개입: 위험한 Tool은 승인 메뉴를 거치고, 모델은 정보가 부족하면 되묻는다. 감사 로그를 남긴다). C6(문서 검색, `search_docs`와 출처 표기)도 이 단계에 포함한다. 태그: `c0`, `c1`, `c1.1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`(커밋 후 태그).
 
 ## 실행
 
@@ -18,6 +18,7 @@ uv run python examples/chat.py                           # 대화형 CLI(.env �
 uv run python examples/chat_walkthrough.py --scenario memory --stream   # 글자 조각이 도착하는 모습(모델 없이)
 uv run python examples/chat_walkthrough.py --scenario mcp               # MCP 서버의 Tool을 부르는 모습(모델 없이, 서버는 실제로 띄움)
 uv run python examples/chat_walkthrough.py --scenario skill             # 스킬 본문을 load_skill로 불러 따르는 모습(모델 없이)
+uv run python examples/chat_walkthrough.py --scenario hitl              # 승인 후 실행과 거부 후 미실행을 보여 준다(모델 없이, 가짜 승인자)
 ```
 
 ### MCP 서버 연결(선택)
@@ -26,10 +27,16 @@ uv run python examples/chat_walkthrough.py --scenario skill             # 스킬
 
 ```bash
 cp mcp.example.json mcp.json    # 연결할 서버를 고친다(git에 올리지 않는다)
-mkdir sandbox                   # 예시의 Filesystem 서버가 접근을 허용하는 유일한 폴더
+mkdir -p data/sandbox           # 예시의 Filesystem 서버가 접근을 허용하는 유일한 폴더(data/는 git에서 제외)
 # .env에 MCP_CONFIG=mcp.json 을 적거나, 실행할 때 --mcp-config mcp.json 을 준다
 uv run python examples/chat.py  # /tools 로 연결된 Tool과 출처를 확인한다
 ```
+
+`mcp.json`의 서버마다 `"trusted": true`를 적으면, 그 서버의 읽기 전용 툴(MCP의 `readOnlyHint`가 true인 툴)은 승인 없이 자동 실행합니다. `trusted`를 적지 않으면 기본값은 false이고, 그 서버의 모든 툴은 실행 전에 승인 메뉴를 거칩니다. 쓰기 툴은 신뢰하더라도 승인을 거칩니다.
+
+서버를 지우지 않고 잠시 끄려면 `"enabled": false`를 적습니다. 끈 서버는 연결하지 않으며, 설정 항목은 파일에 그대로 남깁니다. 기본값은 true입니다.
+
+승인 메뉴는 `1) 승인하고 실행`, `2) 거부`, `3) 다르게 요청(이유 입력)` 세 가지입니다. 거부된 툴은 같은 턴 안에서 다시 묻지 않고 자동으로 막히며, 다음 턴에는 다시 묻습니다. 모든 실행 시도와 결정은 `logs/audit.jsonl`에 한 줄씩 남습니다(인자는 20자까지).
 
 예시 설정은 Time 서버(`uvx mcp-server-time`)와 Filesystem 서버(`npx @modelcontextprotocol/server-filesystem`)를 쓴다. uv와 Node(npx)가 필요하고, 처음 실행은 패키지를 내려받느라 오래 걸릴 수 있다.
 stdio 서버는 내 계정 권한으로 실행되는 프로그램이다. 신뢰하는 서버만 적고, 파일을 쓰는 서버는 접근 폴더를 좁힌다.
@@ -39,14 +46,14 @@ stdio 서버는 내 계정 권한으로 실행되는 프로그램이다. 신뢰�
 `knowledge/` 폴더에 `.md` 문서를 넣으면, 모델이 `search_docs` Tool로 문서를 찾아 답합니다.
 
 ```bash
-uv run python scripts/index_knowledge.py   # 문서를 임베딩해서 index.sqlite에 저장(바뀐 문서만 다시 임베딩)
+uv run python scripts/index_knowledge.py   # 문서를 임베딩해서 data/index.sqlite에 저장(바뀐 문서만 다시 임베딩)
 uv run python examples/chat.py             # 저장된 색인으로 검색하며 대화
 ```
 
 - 임베딩은 OpenAI를 씁니다. 그래서 제공자를 Anthropic으로 골라도 `OPENAI_API_KEY`가 필요합니다.
 - 답의 출처는 `[문서 제목, 위치]` 형식으로 붙습니다. 검색 결과에 없는 출처는 `※` 경고로 표시합니다.
 - 관련 문서가 없으면 모른다고 답합니다. 유사도 시작값은 0.3(`DEFAULT_THRESHOLD`)입니다.
-- `index.sqlite`는 문서에서 다시 만들 수 있으므로 git에서 제외합니다.
+- `data/index.sqlite`는 문서에서 다시 만들 수 있으므로 git에서 제외합니다. 감사 로그는 `logs/audit.jsonl`에 쌓이며 `logs/`도 git에서 제외합니다.
 
 Python 3.12, 패키지 관리는 [uv](https://docs.astral.sh/uv/)를 쓴다.
 
@@ -62,10 +69,12 @@ Python 3.12, 패키지 관리는 [uv](https://docs.astral.sh/uv/)를 쓴다.
 ## 구조
 
 - `src/ai_agent_dock/core/llm/`: 제공자 독립 LLM 호출(`call_llm`, 스트리밍은 `on_text_delta`)과 OpenAI·Anthropic 어댑터
-- `src/ai_agent_dock/core/runtime/`: Agent Loop(`run_agent`)와 설정·결과 타입(`AgentSettings`, `AgentResult`)
+- `src/ai_agent_dock/core/runtime/`: Agent Loop(`run_agent`), 설정·결과 타입(`AgentSettings`, `AgentResult`), 시스템 프롬프트 조립(`prompt.py`의 `build_system_prompt`: 기본 지침, 스킬 목록, 출처 규칙 순서)
+- `src/ai_agent_dock/core/hitl/`: 사람 개입. 승인 메뉴(`approval.py`), 되묻기 Tool(`clarify.py`), 감사 로그(`audit.py`)
 - `src/ai_agent_dock/core/session/`: 대화 세션(턴 사이에 이력을 이어 간다). `AgentSettings`를 받아 턴마다 넘긴다
 - `src/ai_agent_dock/core/skills/`: 스킬 로더. `skills/` 폴더의 `SKILL.md`를 읽고 머리말을 검사하며, 목록 문장과 `load_skill` Tool을 만든다
 - `src/ai_agent_dock/core/tools/`: 기본 제공 Tool(계산기, 현재 시각)과 `ToolRegistry`(이름 중복 방지, 인자 검증, 결과 길이 제한)
+- `src/ai_agent_dock/core/toolkit.py`: 빌트인 Tool 조립(`make_builtin_tools`). 기능 모듈(스킬, 문서 검색, 되묻기)의 Tool을 한 목록으로 모은다. 기능 모듈은 이 파일을 import하지 않는다(순환 방지, `tests/test_toolkit.py`가 확인)
 - `src/ai_agent_dock/core/tools/mcp/`: MCP 클라이언트(설정 파일의 stdio 서버에 접속해 그 서버의 Tool을 가져온다)
 - `src/ai_agent_dock/env.py`: 환경 변수 읽기 도우미
 - `examples/`: CLI 데모와 단계별 출력 데모

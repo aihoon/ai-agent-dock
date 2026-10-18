@@ -14,6 +14,7 @@
 
 import argparse
 import logging
+import sys
 from contextlib import ExitStack
 from dataclasses import replace
 from pathlib import Path
@@ -21,13 +22,17 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from ai_agent_dock.core.llm import Message, Tool, call_llm, config_from_env
-from ai_agent_dock.core.runtime.types import DEFAULT_SYSTEM_PROMPT, AgentSettings
+from ai_agent_dock.core.runtime.prompt import build_system_prompt
+from ai_agent_dock.core.runtime.types import AgentSettings
 from ai_agent_dock.core.session import Session
-from ai_agent_dock.core.retrieval import CITATION_RULE, Knowledge, check_citations, make_search_docs_tool, open_knowledge
-from ai_agent_dock.core.skills import SkillMeta, build_index, make_load_skill_tool, read_skill, scan_skills
-from ai_agent_dock.core.tools import BUILTIN_TOOLS, DEFAULT_MAX_RESULT_CHARS, ToolRegistry
+from ai_agent_dock.core.hitl import AuditLog, ask_in_terminal
+from ai_agent_dock.core.retrieval import Knowledge, check_citations, open_knowledge
+from ai_agent_dock.core.skills import SkillMeta, read_skill, scan_skills
+from ai_agent_dock.core.toolkit import make_builtin_tools
+from ai_agent_dock.core.tools import DEFAULT_MAX_RESULT_CHARS, ToolRegistry
 from ai_agent_dock.env import env_bool, env_float, env_int, env_str
 
+AUDIT_PATH = Path(__file__).resolve().parent.parent / "logs" / "audit.jsonl"  # 실행 기록(감사 로그). logs/는 git에서 제외한다.
 HELP = (
     "/exit 종료 | /reset 대화 이력 비우기 | /history 이력 보기 | /tools 사용 중인 Tool 보기 | "
     "/skills 스킬 목록 | /skill 이름 스킬 지침 넣기 | /help 명령 목록"
@@ -35,7 +40,7 @@ HELP = (
 SHOW = 80  # /history에서 한 항목을 이만큼만 보여 준다.
 SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"  # 프로젝트 루트의 skills/
 KNOWLEDGE_DIR = Path(__file__).resolve().parent.parent / "knowledge"  # 프로젝트 루트의 knowledge/(검색할 문서)
-INDEX_PATH = Path(__file__).resolve().parent.parent / "index.sqlite"  # 문서 색인(문서에서 다시 만들 수 있다)
+INDEX_PATH = Path(__file__).resolve().parent.parent / "data" / "index.sqlite"  # 문서 색인(문서에서 다시 만들 수 있다). data/는 git에서 제외한다.
 
 
 class Progress:
@@ -128,12 +133,10 @@ def main():
     llm = progress.wrap_llm(call_llm)
     with ExitStack() as stack:  # MCP 서버 연결은 프로그램이 끝날 때 이 with가 정리한다.
         try:
-            registry = build_registry(args, stack)
             skills = scan_skills(SKILLS_DIR)
-        except ValueError as e:  # 설정 파일 오류, Tool 이름 겹침, 스킬 형식 오류 등
+        except ValueError as e:  # 스킬 형식 오류 등
             raise SystemExit(f"설정 오류: {e}")
         if skills:
-            registry.add(make_load_skill_tool(skills), source="skills")
             print(f"스킬 {len(skills)}개를 찾았습니다.")
         knowledge = None
         try:
@@ -141,29 +144,33 @@ def main():
         except Exception as e:  # 색인 파일이 깨졌거나 열 수 없으면 문서 검색만 끄고 계속한다.
             print(f"문서 검색을 끕니다: {type(e).__name__}: {e}")
         if knowledge:
-            registry.add(make_search_docs_tool(knowledge.store, knowledge.seen, calls=knowledge.calls), source="knowledge")
             print(f"문서 검색을 켰습니다(문서 {knowledge.files}개, 청크 {knowledge.chunks}개).")
         elif any(KNOWLEDGE_DIR.glob("*.md")):
             print("문서 색인이 없습니다. uv run python scripts/index_knowledge.py 를 먼저 실행하세요.")
-        index = build_index(skills)
-        system_prompt = f"{DEFAULT_SYSTEM_PROMPT}\n\n{index}" if index else DEFAULT_SYSTEM_PROMPT
-        if knowledge:
-            system_prompt = f"{system_prompt}\n\n{CITATION_RULE}"
+        try:
+            registry = build_registry(args, stack, skills=skills, knowledge=knowledge)
+        except ValueError as e:  # 설정 파일 오류, Tool 이름 겹침 등
+            raise SystemExit(f"설정 오류: {e}")
+        audit = AuditLog(AUDIT_PATH)
+        system_prompt = build_system_prompt(skills=skills, cite_docs=knowledge is not None)
         settings = AgentSettings(
             config=config,
             tools=[progress.wrap_tool(t) for t in registry.tools()],
             system_prompt=system_prompt,
             max_steps=args.max_steps,
             llm=llm,
+            approve=lambda call: ask_in_terminal(call, interactive=sys.stdin.isatty()),
+            audit=audit,
         )
         session = Session(settings)
-        repl(session, registry, progress, stream, skills, knowledge)
+        repl(session, registry, progress, stream, skills, knowledge, audit)
 
 
-def build_registry(args, stack: ExitStack) -> ToolRegistry:
-    """내장 Tool과, 설정 파일에 적은 MCP 서버의 Tool을 한 레지스트리에 모은다. 설정 파일이 없으면 내장 Tool만 쓴다."""
+def build_registry(args, stack: ExitStack, *, skills: list[SkillMeta], knowledge: Knowledge | None) -> ToolRegistry:
+    """빌트인 Tool(core/toolkit가 조립)과, 설정 파일에 적은 MCP 서버의 Tool을 한 레지스트리에 모은다. 설정 파일이 없으면 빌트인 Tool만 쓴다."""
     registry = ToolRegistry(max_result_chars=env_int("TOOL_RESULT_MAX_CHARS", DEFAULT_MAX_RESULT_CHARS))
-    registry.add_all(BUILTIN_TOOLS)
+    for source, tool in make_builtin_tools(skills=skills, knowledge=knowledge):
+        registry.add(tool, source=source)
 
     config_path = args.mcp_config or env_str("MCP_CONFIG", "")  # 우선순위: 인자 > 환경 변수 > 사용 안 함
     if config_path:
@@ -200,6 +207,7 @@ def repl(
     stream: bool,
     skills: list[SkillMeta],
     knowledge: Knowledge | None = None,
+    audit: AuditLog | None = None,
 ) -> None:
     print(f"대화를 시작합니다({'스트리밍' if stream else '일괄 응답'}). 명령을 보려면 /help 를 입력하세요.")
     while True:
@@ -248,6 +256,8 @@ def repl(
             continue
 
         progress.begin_turn()
+        if audit:
+            audit.begin_turn()
         calls_before = len(knowledge.calls) if knowledge else 0
         try:
             result = session.ask(line, on_text_delta=progress.on_text_delta if stream else None)

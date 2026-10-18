@@ -17,6 +17,7 @@ class ServerSpec:
     command: str
     args: list[str] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)
+    trusted: bool = False  # 이 서버의 읽기 전용 힌트를 믿어도 되는지. 기본은 믿지 않는다(승인 절차를 거친다).
 
 
 def load_config(path: str | Path) -> dict[str, ServerSpec]:
@@ -49,5 +50,13 @@ def load_config(path: str | Path) -> dict[str, ServerSpec]:
         env = raw.get("env", {})
         if not isinstance(env, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in env.items()):
             raise ValueError(f'{where}: "env"는 문자열 값의 객체여야 한다')
-        specs[name] = ServerSpec(command=command, args=list(args), env=dict(env))
+        trusted = raw.get("trusted", False)
+        if not isinstance(trusted, bool):
+            raise ValueError(f'{where}: "trusted"는 true 또는 false여야 한다')
+        enabled = raw.get("enabled", True)
+        if not isinstance(enabled, bool):
+            raise ValueError(f'{where}: "enabled"는 true 또는 false여야 한다')
+        if not enabled:
+            continue  # 끈 서버는 연결하지 않는다. 설정 항목은 파일에 그대로 남긴다.
+        specs[name] = ServerSpec(command=command, args=list(args), env=dict(env), trusted=trusted)
     return specs

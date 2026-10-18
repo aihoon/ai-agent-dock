@@ -17,11 +17,11 @@ from dotenv import load_dotenv
 
 from ai_agent_dock.core.llm import LLMConfig, LLMResponse, Message, Tool, ToolCall, call_llm, config_from_env
 from ai_agent_dock.core.runtime.loop import run_agent
+from ai_agent_dock.core.runtime.prompt import build_system_prompt
 from ai_agent_dock.core.runtime.types import AgentSettings
 from ai_agent_dock.core.tools import BUILTIN_TOOLS
 
 SHOW = 200  # 긴 내용은 이만큼만 보여 준다.
-SYSTEM_PROMPT = "계산과 시간 조회는 반드시 Tool을 사용해 답한다."
 
 
 def clip(text, n=SHOW):
@@ -149,14 +149,15 @@ def main():
     tracer = Tracer(model)
     tools = [tracer.wrap_tool(t) for t in BUILTIN_TOOLS]
 
+    system_prompt = build_system_prompt()
     banner("시작")
     print(f"모드      : {mode}")
     print(f"질문      : {question}")
-    print(f"시스템    : {SYSTEM_PROMPT}")
+    print(f"시스템    : {system_prompt}")
     print(f"Tool      : {', '.join(t.name for t in tools)}")
     print(f"최대 스텝 : {max_steps or '(.env의 AGENT_MAX_STEPS 또는 기본 10)'}")
 
-    settings = AgentSettings(config=config, tools=tools, system_prompt=SYSTEM_PROMPT, max_steps=max_steps, llm=tracer.llm)
+    settings = AgentSettings(config=config, tools=tools, system_prompt=system_prompt, max_steps=max_steps, llm=tracer.llm)
     result = run_agent(settings, question)
 
     banner("결과")

@@ -27,12 +27,12 @@ logs/
 .claude/settings.local.json
 .claude/.headroom_wrap_*
 
-# MCP 서버 설정(토큰이 들어갈 수 있음)과 Filesystem 서버가 쓰는 샌드박스 폴더
+# MCP 서버 설정(토큰이 들어갈 수 있음)
 mcp.json
-sandbox/
 
 # OS
 .DS_Store
 
-# 지식 검색 색인(문서에서 다시 만들 수 있다)
-index.sqlite
+# 생성물: 지식 검색 색인(data/index.sqlite, 문서에서 다시 만들 수 있다)과
+# Filesystem 서버의 샌드박스(data/sandbox)
+data/

@@ -62,6 +62,8 @@ def make_load_skill_tool(metas: list[SkillMeta]) -> Tool:
             "properties": {"name": {"type": "string", "description": "스킬 목록에 있는 이름"}},
             "required": ["name"],
         },
+        read_only=True,
+        trusted=True,
         func=load_skill,
     )
 

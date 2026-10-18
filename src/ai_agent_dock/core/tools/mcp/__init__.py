@@ -52,9 +52,13 @@ def _to_tool(connection: McpConnection, definition: Any) -> Tool:
     def func(**arguments: Any) -> str:
         return result_to_text(connection.call_tool(definition.name, arguments))
 
+    # 읽기 전용 힌트와 서버 신뢰를 각각 옮긴다. 자동 실행 판단은 루프가 두 값을 함께 본다.
+    annotations = getattr(definition, "annotations", None)
     return Tool(
         name=model_tool_name(connection.name, definition.name),
         description=definition.description or definition.title or "",
         parameters=definition.input_schema,
         func=func,
+        read_only=bool(getattr(annotations, "read_only_hint", False)),
+        trusted=connection.spec.trusted,
     )
