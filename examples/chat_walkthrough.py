@@ -11,6 +11,7 @@
   uv run python examples/chat_walkthrough.py --scenario memory --stream   # 모델 없이: 글자 조각이 도착하는 모습(│가 조각 경계)
   uv run python examples/chat_walkthrough.py --scenario skill    # 모델 없이: 스킬 목록에서 본문을 load_skill로 불러 따르는 모습
   uv run python examples/chat_walkthrough.py --scenario rag      # 모델 없이: 문서를 검색해 출처를 붙여 답하는 모습(임베딩도 가짜)
+  uv run python examples/chat_walkthrough.py --scenario workflow # 모델 없이: 워크플로가 고쳐 쓰기 → 승인 대기 → (껐다 켜고) 재개하는 모습
   uv run python examples/chat_walkthrough.py --stream "17*23은 얼마야?"    # 실제 모델로 스트리밍
   uv run python examples/chat_walkthrough.py "17*23은 얼마야?" "거기에 2를 곱해 줘"   # 실제 모델로 여러 턴
   uv run python examples/chat_walkthrough.py --provider anthropic "안녕" "내가 방금 뭐라고 했지?"
@@ -19,21 +20,28 @@ scenario는 미리 정한 응답을 쓰는 가짜 모델이라 API 호출과 비
 """
 
 import argparse
+import json
 import logging
+import sqlite3
 import sys
+import tempfile
 from contextlib import ExitStack
 from pathlib import Path
 
 from dotenv import load_dotenv
+from langgraph.checkpoint.sqlite import SqliteSaver
 from walkthrough import Tracer, ask, banner, describe, scripted  # C1 워크스루의 도구를 재사용한다.
 
 from ai_agent_dock.core.hitl import Approval
 from ai_agent_dock.core.llm import LLMConfig, LLMResponse, Tool, ToolCall, call_llm, config_from_env
-from ai_agent_dock.core.retrieval import HashingEmbedder, KnowledgeIndex, make_search_docs_tool
+from ai_agent_dock.core.observability import Tracer as TraceFile
+from ai_agent_dock.core.orchestration import WorkflowContext, WorkflowRunner
+from ai_agent_dock.core.retrieval import HashingEmbedder, Knowledge, KnowledgeIndex, make_search_docs_tool
 from ai_agent_dock.core.runtime.types import AgentSettings
 from ai_agent_dock.core.session import Session
 from ai_agent_dock.core.skills import make_load_skill_tool, scan_skills
 from ai_agent_dock.core.tools import BUILTIN_TOOLS
+from ai_agent_dock.workflows import WORKFLOWS
 
 SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"  # 프로젝트 루트의 skills/
 KNOWLEDGE_DIR = Path(__file__).resolve().parent.parent / "knowledge"  # 프로젝트 루트의 knowledge/
@@ -210,7 +218,7 @@ def hitl_write_tool(tracer):
 def main():
     parser = argparse.ArgumentParser(description="여러 턴 대화의 단계별 출력 데모")
     parser.add_argument("questions", nargs="*", help="실제 모델에 차례로 보낼 질문들(생략하면 기본 두 질문)")
-    parser.add_argument("--scenario", choices=SCENARIOS, help="모델 없이 시나리오 실행")
+    parser.add_argument("--scenario", choices=[*SCENARIOS, "workflow"], help="모델 없이 시나리오 실행")
     parser.add_argument("--provider", help="LLM 제공자(openai, anthropic). 생략하면 .env의 LLM_PROVIDER")
     parser.add_argument("--max-steps", type=int, help="한 턴에서 모델을 호출하는 횟수 상한")
     parser.add_argument("--stream", action="store_true", help="스트리밍으로 받아 글자 조각이 도착하는 모습을 보여 준다")
@@ -218,6 +226,8 @@ def main():
 
     load_dotenv()
     logging.basicConfig(level=logging.ERROR)
+    if args.scenario == "workflow":
+        return walk_workflow()
 
     if args.scenario:
         questions, model, scenario_steps = SCENARIOS[args.scenario]
@@ -311,6 +321,55 @@ def walk(session, tracer, questions, turn_models, holder, delta, mode, max_steps
 
     banner("끝")
     print(f"최종 세션 이력: {len(session.history)}개")
+
+
+def walk_workflow():
+    """answer-check 워크플로를 가짜 모델로 돌린다. 첫 답은 출처가 없어 코드가 고쳐 쓰게 하고, 둘째 답은 승인 단계에서 멈춘다.
+    그 뒤 새 DB 연결과 새 실행기(프로그램을 껐다 켠 것과 같음)로 승인 대기 실행을 찾아 승인한다."""
+    index = KnowledgeIndex(":memory:", HashingEmbedder())  # 가짜 임베딩으로 knowledge/를 색인한다(네트워크 없음).
+    index.refresh(KNOWLEDGE_DIR)
+    knowledge = Knowledge(store=index, seen=set(), files=1, chunks=1)
+    llm = scripted(
+        final("Tool은 이름과 설명으로 정의합니다."),  # 출처가 없다 → 출처 검사 실패 → 고쳐 쓰기
+        ask("c1", "search_docs", query="Tool 정의 인자 스키마"),
+        final("Tool은 이름, 설명, 인자 스키마, 실행 함수로 정의합니다 [Tool과 MCP, Tool 정의]."),
+    )
+    config = LLMConfig(provider="scenario", model="scenario", max_output_tokens=None)
+    with tempfile.TemporaryDirectory() as tmp:
+        trace = TraceFile(Path(tmp))
+        settings = AgentSettings(config=config, tools=BUILTIN_TOOLS, llm=llm, tracer=trace)
+        db = Path(tmp) / "checkpoints.sqlite"
+
+        def runner(conn):
+            return WorkflowRunner(WORKFLOWS, WorkflowContext(settings=settings, knowledge=knowledge), SqliteSaver(conn))
+
+        banner("워크플로 시작: /workflow answer-check Tool은 무엇으로 정의하나?")
+        conn = sqlite3.connect(db, check_same_thread=False)
+        waiting = runner(conn).start("answer-check", "Tool은 무엇으로 정의하나?")
+        show_workflow_trace(trace)
+        print(f"\n→ 상태: {waiting.status}, 고쳐 쓴 횟수 {waiting.revisions}\n   초안: {waiting.draft}")
+        conn.close()
+
+        banner("프로그램을 껐다 켬: 새 DB 연결과 새 실행기")
+        conn = sqlite3.connect(db, check_same_thread=False)
+        restarted = runner(conn)
+        [found] = restarted.pending()
+        print(f"/workflows → 승인 대기 1개: {found.run_id} ({found.question})")
+        done = restarted.resume(found.run_id, "approve")
+        print(f"/workflow-resume 1 → 1) 승인\n→ 상태: {done.status}, 답: {done.answer}")
+        print("   (재개할 때 모델을 다시 부르지 않았다. 체크포인트에 저장된 초안을 그대로 썼다)")
+        conn.close()
+
+
+def show_workflow_trace(trace):
+    """추적 기록의 workflow_* 줄을 차례로 보여 준다."""
+    for line in trace.path.read_text(encoding="utf-8").splitlines():
+        row = json.loads(line)
+        if row["kind"] == "workflow_node":
+            update = {k: v for k, v in row["update"].items() if k in ("problem", "revisions", "status")}
+            print(f"  · 노드 {row['node']:<8} {update or ''}")
+        elif row["kind"].startswith("workflow_"):
+            print(f"  · {row['kind']}")
 
 
 if __name__ == "__main__":

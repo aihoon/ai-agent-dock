@@ -3,7 +3,8 @@
 응용(CLI, 나중의 브라우저)은 입력을 find_command로 찾아 실행하고 돌려받은 문장을 화면에 보여 주기만 한다.
 처리 함수는 화면에 직접 출력하지 않고 보여 줄 문장을 돌려준다. 실행 전 확인이 필요한 명령은 confirm이 확인 문장을 주고,
 확인은 응용이 받는다(터미널은 y/N, 브라우저는 대화상자). 응용에만 있는 명령(/exit)은 응용에 둔다.
-의존 방향: 이 모듈은 session, memory, llm, observability를 import한다. runtime과 session은 이 모듈을 import하지 않는다.
+의존 방향: 이 모듈은 session, memory, llm, observability, orchestration을 import한다. runtime과 session은 이 모듈을 import하지 않는다.
+워크플로가 사람 승인에서 멈추면 waiting에 승인 요청을 두고, 응용이 메뉴로 답을 받아 answer_workflow를 부른다(C10 D6).
 """
 
 from __future__ import annotations
@@ -12,10 +13,11 @@ import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 
-from .llm import LLMRequest, Message, Tool
+from .llm import AssistantMessage, LLMRequest, Message, Tool, UserMessage
 from .llm.tokens import count as count_tokens, request_tokens
 from .memory import MemoryStore
 from .observability import new_session_id
+from .orchestration import WAITING, Outcome, WorkflowRunner
 from .retrieval import Knowledge
 from .runtime.types import Usage
 from .session import Session
@@ -43,6 +45,8 @@ class CommandContext:
     compact_warn_tokens: int = 100_000  # COMPACT_WARN_TOKENS
     memory_warn_tokens: int = 2_000  # MEMORY_WARN_TOKENS
     record: SessionRecord | None = None  # 지금 세션의 저장 기록. 첫 턴(또는 이름 정하기)에 만든다.
+    workflows: WorkflowRunner | None = None  # 워크플로 실행기(C10). None이면 워크플로 명령을 쓸 수 없다.
+    waiting: Outcome | None = None  # 사람 승인을 기다리는 워크플로. 응용이 메뉴를 보여 주고 answer_workflow로 답한다.
 
     @property
     def tracer(self):
@@ -76,6 +80,16 @@ class CommandContext:
 
     def reload_prompt(self) -> None:
         self.session.settings = replace(self.session.settings, system_prompt=self.make_prompt())
+
+    def runner(self) -> WorkflowRunner:
+        """워크플로 실행기. 노드 안 에이전트가 지금 설정(메모리를 반영한 시스템 프롬프트)을 쓰게 맞춘다."""
+        self.workflows.context.settings = self.session.settings
+        self.session.record_start()  # 워크플로가 이 세션의 첫 동작이어도 추적 파일에 세션 설정을 먼저 쓴다.
+        return self.workflows
+
+    def answer_workflow(self, decision: str) -> str:
+        """승인 요청에 답한다: approve, reject, revise:이유(C10 D7)."""
+        return _report(self, self.runner().resume(self.waiting.run_id, decision))
 
 
 @dataclass(frozen=True)
@@ -261,6 +275,58 @@ def _memory_delete(ctx: CommandContext, arg: str) -> str:
     return f"{n}번을 지웠습니다. 다음 턴부터 반영합니다."
 
 
+STATUS = {"approved": "승인", "rejected": "거부", "no_evidence": "근거 없음"}
+
+
+def _report(ctx: CommandContext, outcome: Outcome) -> str:
+    """워크플로 결과를 문장으로. 승인 대기면 승인 요청을 두고, 끝났으면 결과를 채팅 이력에 한 턴으로 붙인다(C10 D5)."""
+    if outcome.status == WAITING:
+        ctx.waiting = outcome
+        return f"[승인 요청] {outcome.workflow} (고쳐 쓴 횟수 {outcome.revisions})\n{outcome.draft}"
+    ctx.waiting = None
+    if outcome.answer:  # 승인과 근거 없음만 붙인다. 거부는 붙이지 않는다.
+        ctx.session.history = [*ctx.session.history, UserMessage(content=outcome.question), AssistantMessage(content=outcome.answer)]
+        ctx.ensure_record(auto_name(outcome.question))
+        ctx.save()
+    label = STATUS.get(outcome.status, outcome.status)
+    return f"워크플로 끝: {label} (고쳐 쓴 횟수 {outcome.revisions})" + (f"\n{outcome.answer}" if outcome.answer else "")
+
+
+def _no_workflows(ctx: CommandContext) -> str | None:
+    return None if ctx.workflows else "워크플로를 쓸 수 없습니다."
+
+
+def _workflows(ctx: CommandContext, arg: str) -> str:
+    if reason := _no_workflows(ctx):
+        return reason
+    lines = ["워크플로:", *(f"  {w.name}: {w.description}" for w in ctx.workflows.workflows.values())]
+    pending = ctx.runner().pending()
+    lines.append("승인 대기:" if pending else "승인 대기: 없음")
+    lines += [f"  {n}. {o.workflow}  {o.question[:30]}  ({o.started.replace('T', ' ')})" for n, o in enumerate(pending, start=1)]
+    return "\n".join([*lines, "시작은 /workflow 이름 요청, 이어 가기는 /workflow-resume 번호"])
+
+
+def _workflow(ctx: CommandContext, arg: str) -> str:
+    if reason := _no_workflows(ctx):
+        return reason
+    name, _, question = arg.partition(" ")
+    if not question.strip():
+        return "사용법: /workflow 이름 요청 (목록은 /workflows)"
+    try:
+        return _report(ctx, ctx.runner().start(name, question.strip()))
+    except ValueError as e:  # 없는 워크플로, 문서 색인 없음
+        return str(e)
+
+
+def _workflow_resume(ctx: CommandContext, arg: str) -> str:
+    if reason := _no_workflows(ctx):
+        return reason
+    pending = ctx.runner().pending()
+    if not arg.isdigit() or not 1 <= int(arg) <= len(pending):
+        return f"사용법: /workflow-resume 번호 (1~{len(pending)}, 목록은 /workflows)" if pending else "승인 대기 중인 워크플로가 없습니다."
+    return _report(ctx, pending[int(arg) - 1])
+
+
 COMMANDS = [
     Command("/reset", "대화 이력 비우기", _reset),
     Command("/history", "이력 보기", _history),
@@ -276,6 +342,9 @@ COMMANDS = [
     Command("/memory", "장기 메모리 보기", _memory),
     Command("/memory-add 내용", "장기 메모리에 더하기", _memory_add),
     Command("/memory-delete 번호", "장기 메모리에서 지우기(확인 후)", _memory_delete, confirm=_memory_delete_confirm),
+    Command("/workflows", "워크플로 목록과 승인 대기 실행 보기", _workflows),
+    Command("/workflow 이름 요청", "워크플로 시작(예: /workflow answer-check 질문)", _workflow),
+    Command("/workflow-resume 번호", "승인 대기 중인 워크플로 이어 가기", _workflow_resume),
 ]
 
 

@@ -9,12 +9,14 @@ from pathlib import Path
 
 import pytest
 from dotenv import load_dotenv
+from langgraph.checkpoint.memory import InMemorySaver
 
 from ai_agent_dock.core.evals import evaluate, last_passed, load_cases, regressions, save_run, scripted_approver, scripted_input, summarize
 from ai_agent_dock.core.llm import LLMRequest, UserMessage, call_llm, config_from_env
 from ai_agent_dock.core.llm.tokens import request_tokens
 from ai_agent_dock.core.session.compact import compact
 from ai_agent_dock.core.observability import Tracer, new_session_id
+from ai_agent_dock.core.orchestration import WorkflowContext, WorkflowRunner
 from ai_agent_dock.core.retrieval import open_knowledge
 from ai_agent_dock.core.runtime.prompt import build_system_prompt
 from ai_agent_dock.core.runtime.types import AgentSettings
@@ -22,6 +24,7 @@ from ai_agent_dock.core.skills import scan_skills
 from ai_agent_dock.core.toolkit import make_builtin_tools
 from ai_agent_dock.core.tools import DEFAULT_MAX_RESULT_CHARS, ToolRegistry
 from ai_agent_dock.env import env_bool, env_float, env_int, env_str
+from ai_agent_dock.workflows import WORKFLOWS
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -91,7 +94,11 @@ def test_cases_with_real_model(request):
             count = lambda h: request_tokens(LLMRequest(config=config, messages=h, system_prompt=system_prompt, tools=tools))
             return compact(history, keep_turns=env_int("COMPACT_KEEP_TURNS", 4), summarize=summarize, count=count)[0]
 
-        results = [evaluate(case, make_settings, repeat, compactor=compactor) for case in cases]
+        def workflows(settings):  # 워크플로 케이스(C10): 체크포인트는 메모리에 둔다(평가는 재개하지 않는다).
+            context = WorkflowContext(settings=settings, knowledge=knowledge, max_revisions=env_int("WORKFLOW_MAX_REVISIONS", 2))
+            return WorkflowRunner(WORKFLOWS, context, InMemorySaver())
+
+        results = [evaluate(case, make_settings, repeat, compactor=compactor, workflows=workflows) for case in cases]
 
     results_dir = ROOT / "data" / "evals"
     previous = last_passed(results_dir)  # 저장하기 전에 직전 실행을 읽는다.

@@ -34,6 +34,10 @@ class Case:
     setup_turns: list[str] = field(default_factory=list)  # 마지막 질문 전에 보낼 사용자 질문들(memory 케이스)
     compact_before: bool = False  # 마지막 질문 전에 컴팩션을 실행한다
     memory_items: list[str] = field(default_factory=list)  # 평가 동안만 쓰는 장기 메모리(실제 data/memory.md는 건드리지 않는다)
+    workflow: str | None = None  # 워크플로 이름. 있으면 질문을 워크플로로 실행한다(C10 D22).
+    workflow_decisions: list[str] = field(default_factory=list)  # 승인 단계에서 차례로 줄 답: approve, reject, revise:이유. 다 쓰면 approve
+    expect_status: str | None = None  # 워크플로 마지막 상태: approved, rejected, no_evidence
+    expect_max_revisions: int | None = None  # 고쳐 쓴 횟수 상한
 
 
 def load_cases(path: Path) -> list[Case]:
@@ -85,6 +89,16 @@ def check(case: Case, result: AgentResult) -> list[str]:
             failures.append("답에 출처 [문서 제목, 위치]가 없다")
         if not case.expect_citation and has_citation:
             failures.append("근거가 없는데 출처를 붙였다")
+    return failures
+
+
+def check_workflow(case: Case, status: str, revisions: int) -> list[str]:
+    """워크플로 케이스의 마지막 상태와 고쳐 쓴 횟수를 본다(C10 D22)."""
+    failures = []
+    if case.expect_status and status != case.expect_status:
+        failures.append(f"워크플로가 {case.expect_status}가 아니라 {status}로 끝났다")
+    if case.expect_max_revisions is not None and revisions > case.expect_max_revisions:
+        failures.append(f"고쳐 쓴 횟수 {revisions}가 상한 {case.expect_max_revisions}를 넘었다")
     return failures
 
 

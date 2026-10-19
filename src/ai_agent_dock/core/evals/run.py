@@ -12,9 +12,10 @@ from pathlib import Path
 
 from ..hitl import Approval
 from ..llm import Message, ToolCall
+from ..orchestration import WAITING, WorkflowRunner
 from ..runtime.loop import run_agent
-from ..runtime.types import AgentSettings
-from .score import Case, called_tools, check
+from ..runtime.types import AgentResult, AgentSettings
+from .score import Case, called_tools, check, check_workflow
 
 
 @dataclass
@@ -56,15 +57,24 @@ def evaluate(
     make_settings: Callable[[Case], AgentSettings],
     repeat: int = 1,
     compactor: Callable[[list[Message]], list[Message]] | None = None,
+    workflows: Callable[[AgentSettings], WorkflowRunner] | None = None,
 ) -> CaseResult:
     """케이스를 repeat번 실행한다. 실행마다 설정을 새로 만든다(미리 적은 답이 실행마다 처음부터 쓰이도록).
 
     setup_turns가 있으면 앞선 턴을 먼저 보내고, compact_before면 마지막 질문 전에 compactor로 이력을 줄인다.
     판정은 마지막 질문의 턴만 본다(앞선 턴의 Tool 호출은 세지 않는다).
+    workflow가 있으면 질문을 워크플로로 실행하고, 승인 단계에는 workflow_decisions를 차례로 답한다(C10 D22).
     """
     outcome = CaseResult(id=case.id, category=case.category, runs=repeat, passes=0)
     for _ in range(repeat):
         settings = make_settings(case)
+        if case.workflow:
+            failures, outcome.answer = run_workflow_case(case, workflows(settings))
+            if failures:
+                outcome.failures = failures
+            else:
+                outcome.passes += 1
+            continue
         history: list[Message] = []
         for question in case.setup_turns:
             history = run_agent(settings, question, history=history).history
@@ -80,6 +90,16 @@ def evaluate(
         else:
             outcome.passes += 1
     return outcome
+
+
+def run_workflow_case(case: Case, runner: WorkflowRunner) -> tuple[list[str], str | None]:
+    """(어긋난 규칙, 최종 답). 판정은 최종 답과 마지막 상태, 고쳐 쓴 횟수로 한다."""
+    decisions = list(case.workflow_decisions)
+    result = runner.start(case.workflow, case.question)
+    while result.status == WAITING:
+        result = runner.resume(result.run_id, decisions.pop(0) if decisions else "approve")
+    answer = AgentResult(answer=result.answer, status="completed", steps=0, history=[])
+    return check(case, answer) + check_workflow(case, result.status, result.revisions), result.answer
 
 
 def last_passed(directory: Path) -> set[str] | None:

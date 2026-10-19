@@ -14,18 +14,21 @@
 
 import argparse
 import logging
+import sqlite3
 import sys
 from contextlib import ExitStack
 from dataclasses import replace
 from pathlib import Path
 
 from dotenv import load_dotenv
+from langgraph.checkpoint.sqlite import SqliteSaver
 
 from ai_agent_dock.core.commands import CommandContext, find_command, help_text
 from ai_agent_dock.core.hitl import AuditLog, ask_in_terminal
 from ai_agent_dock.core.llm import LLMRequest, Tool, UserMessage, call_llm, config_from_env
 from ai_agent_dock.core.memory import MemoryStore
 from ai_agent_dock.core.observability import Tracer
+from ai_agent_dock.core.orchestration import WorkflowContext, WorkflowRunner
 from ai_agent_dock.core.retrieval import Knowledge, check_citations, open_knowledge
 from ai_agent_dock.core.runtime.prompt import build_system_prompt
 from ai_agent_dock.core.runtime.types import AgentSettings
@@ -35,6 +38,7 @@ from ai_agent_dock.core.skills import SkillMeta, scan_skills
 from ai_agent_dock.core.toolkit import make_builtin_tools
 from ai_agent_dock.core.tools import DEFAULT_MAX_RESULT_CHARS, ToolRegistry
 from ai_agent_dock.env import env_bool, env_float, env_int, env_str
+from ai_agent_dock.workflows import WORKFLOWS
 
 AUDIT_PATH = Path(__file__).resolve().parent.parent / "logs" / "audit.jsonl"  # 실행 기록(감사 로그). logs/는 git에서 제외한다.
 TRACE_DIR = Path(__file__).resolve().parent.parent / "logs" / "sessions"  # 추적 기록(세션별 파일). TRACE_ENABLED=false면 쓰지 않는다.
@@ -42,6 +46,7 @@ APP_COMMANDS = [("/help", "명령 목록 보기"), ("/exit", "종료")]  # 응�
 HELP = help_text(APP_COMMANDS)
 SESSIONS_DIR = Path(__file__).resolve().parent.parent / "data" / "sessions"  # 세션 저장(이어 하기용). data/는 git에서 제외한다.
 MEMORY_PATH = Path(__file__).resolve().parent.parent / "data" / "memory.md"  # 장기 메모리. data/는 git에서 제외한다.
+CHECKPOINT_PATH = Path(__file__).resolve().parent.parent / "data" / "checkpoints.sqlite"  # 워크플로 체크포인트(C10 D4). data/는 git에서 제외한다.
 SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"  # 프로젝트 루트의 skills/
 KNOWLEDGE_DIR = Path(__file__).resolve().parent.parent / "knowledge"  # 프로젝트 루트의 knowledge/(검색할 문서)
 INDEX_PATH = Path(__file__).resolve().parent.parent / "data" / "index.sqlite"  # 문서 색인(문서에서 다시 만들 수 있다). data/는 git에서 제외한다.
@@ -166,6 +171,7 @@ def main():
             keep_turns=env_int("COMPACT_KEEP_TURNS", 4),
             compact_warn_tokens=env_int("COMPACT_WARN_TOKENS", 100_000),
             memory_warn_tokens=env_int("MEMORY_WARN_TOKENS", 2_000),
+            workflows=make_workflows(stack, settings, knowledge),
         )
         repl(session, ctx, progress, stream)
 
@@ -193,6 +199,31 @@ def build_registry(args, stack: ExitStack, *, skills: list[SkillMeta], knowledge
             registry.add_all(tools, source=f"mcp:{server}")
             print(f"  MCP 서버 {server}: Tool {len(tools)}개 연결됨")
     return registry
+
+
+def make_workflows(stack: ExitStack, settings: AgentSettings, knowledge: Knowledge | None) -> WorkflowRunner:
+    """워크플로 실행기. 체크포인트는 data/checkpoints.sqlite에 저장한다(서비스에서는 C12에서 Postgres로 바꾼다)."""
+    CHECKPOINT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(CHECKPOINT_PATH, check_same_thread=False)
+    stack.callback(conn.close)
+    context = WorkflowContext(settings=settings, knowledge=knowledge, max_revisions=env_int("WORKFLOW_MAX_REVISIONS", 2))
+    return WorkflowRunner(WORKFLOWS, context, SqliteSaver(conn))
+
+
+def ask_workflow_approval() -> str | None:
+    """워크플로 승인 메뉴(C10 D7). 엔터나 입력 끝이면 None(승인 대기로 남긴다)."""
+    print("  1) 승인\n  2) 거부\n  3) 다르게 요청(이유 입력)")
+    try:
+        choice = input("> ").strip()
+        if choice == "1":
+            return "approve"
+        if choice == "2":
+            return "reject"
+        if choice == "3":
+            return "revise:" + input("무엇을 고칠까요? ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+    return None
 
 
 def make_summarizer(config):
@@ -244,7 +275,15 @@ def repl(session: Session, ctx: CommandContext, progress: Progress, stream: bool
             if question and input(f"{question} (y/N): ").strip().lower() != "y":
                 print("취소했습니다.")
                 continue
+            progress.begin_turn()  # 워크플로 명령도 노드 안에서 모델을 부르므로 스텝 번호를 새로 센다.
             print(command.run(ctx, arg))
+            while ctx.waiting:  # 워크플로가 사람 승인에서 멈췄다. 답하지 않으면 승인 대기로 남는다(C10 D6).
+                decision = ask_workflow_approval()
+                if decision is None:
+                    ctx.waiting = None
+                    print("승인 대기로 남깁니다. /workflows 로 다시 볼 수 있습니다.")
+                    break
+                print(ctx.answer_workflow(decision))
             continue
 
         progress.begin_turn()

@@ -29,7 +29,7 @@ class Session:
         self.total_usage = Usage()  # 이번 세션의 누적 토큰(/tokens)
         self.trace_started = False  # 추적 기록에 세션 설정(session_start)을 썼는지. 첫 턴에 쓴다(C9 D27).
 
-    def _record_start(self) -> None:
+    def record_start(self) -> None:
         """세션 설정은 세션의 첫 턴 직전에 한 번만 기록한다(C8 D18). 질문 없이 끝난 세션은 추적 파일을 만들지 않는다."""
         tracer = self.settings.tracer
         if tracer is None or self.trace_started:
@@ -54,7 +54,7 @@ class Session:
             settings = replace(self.settings, llm=partial(self.settings.llm, on_text_delta=on_text_delta))
         else:
             settings = self.settings
-        self._record_start()
+        self.record_start()
         result = run_agent(settings, question, history=self.history)
         # 예외가 나면 이 줄에 도달하지 않으므로 실패한 턴은 이력에 남지 않는다.
         # max_steps로 끝난 턴도 모든 Tool 요청에 결과가 붙어 있어 이력이 일관되므로 그대로 유지한다.

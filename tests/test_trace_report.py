@@ -59,6 +59,7 @@ def test_cached_tokens_are_summed_and_command_records_are_not_turns(tmp_path):
         {"session": "s", "time": "t", "turn": 1, "kind": "llm", "input_tokens": 2010, "output_tokens": 5, "cached_input_tokens": 2000},
         {"session": "s", "time": "t", "turn": 1, "kind": "compact", "before_tokens": 10, "after_tokens": 5},
         {"session": "s", "time": "t", "turn": 1, "kind": "session_rename", "old_name": "a", "new_name": "b"},
+        {"session": "s", "time": "t", "turn": 1, "kind": "workflow_node", "node": "write"},
     ]
     (tmp_path / "s.jsonl").write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
     stats = all_stats(tmp_path)[0]
