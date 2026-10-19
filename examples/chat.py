@@ -79,6 +79,11 @@ class Progress:
         self.end_line()
         print(message, flush=True)
 
+    def workflow_step(self, message: str):
+        """워크플로 노드가 알린 줄(C10 D24). 노드마다 스텝 번호를 새로 센다."""
+        self.begin_turn()
+        self._say(f"▸ {message}")
+
     def wrap_llm(self, llm):
         def traced(request, on_text_delta=None):
             self.step += 1
@@ -171,7 +176,7 @@ def main():
             keep_turns=env_int("COMPACT_KEEP_TURNS", 4),
             compact_warn_tokens=env_int("COMPACT_WARN_TOKENS", 100_000),
             memory_warn_tokens=env_int("MEMORY_WARN_TOKENS", 2_000),
-            workflows=make_workflows(stack, settings, knowledge),
+            workflows=make_workflows(stack, settings, knowledge, progress.workflow_step),
         )
         repl(session, ctx, progress, stream)
 
@@ -201,12 +206,13 @@ def build_registry(args, stack: ExitStack, *, skills: list[SkillMeta], knowledge
     return registry
 
 
-def make_workflows(stack: ExitStack, settings: AgentSettings, knowledge: Knowledge | None) -> WorkflowRunner:
+def make_workflows(stack: ExitStack, settings: AgentSettings, knowledge: Knowledge | None, progress) -> WorkflowRunner:
     """워크플로 실행기. 체크포인트는 data/checkpoints.sqlite에 저장한다(서비스에서는 C12에서 Postgres로 바꾼다)."""
     CHECKPOINT_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(CHECKPOINT_PATH, check_same_thread=False)
     stack.callback(conn.close)
-    context = WorkflowContext(settings=settings, knowledge=knowledge, max_revisions=env_int("WORKFLOW_MAX_REVISIONS", 2))
+    max_revisions = env_int("WORKFLOW_MAX_REVISIONS", 2)
+    context = WorkflowContext(settings=settings, knowledge=knowledge, max_revisions=max_revisions, progress=progress)
     return WorkflowRunner(WORKFLOWS, context, SqliteSaver(conn))
 
 

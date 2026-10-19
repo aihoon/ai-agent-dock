@@ -6,10 +6,16 @@ from collections.abc import Callable
 
 from ..llm import Tool
 
+CANCELLED = "사용자가 질문에 답하지 않고 취소했다. 다시 묻지 말고, 지금 아는 것으로 짧게 답을 끝낸다."
+
 
 def make_ask_user_tool(input_fn: Callable[[str], str] = input) -> Tool:
     def ask_user(question: str) -> str:
-        return input_fn(f"[질문] {question}\n> ").strip()
+        answer = input_fn(f"[질문] {question}\n> ").strip()
+        if answer.startswith("/"):  # 슬래시 명령은 답이 아니라 취소로 본다(C10 D25).
+            print(f"질문을 취소했습니다. 명령({answer.split()[0]})은 답이 끝난 뒤 다시 입력하세요.")
+            return CANCELLED
+        return answer
 
     return Tool(
         name="ask_user",

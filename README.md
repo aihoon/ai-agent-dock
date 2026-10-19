@@ -4,7 +4,7 @@
 Tool 호출, 스킬, 세션 기반 대화를 갖춘 플랫폼을 만들고, 그 위에 스킬·플러그인을 설치하거나 코드 워크플로를 얹어 **애플리케이션**을 만든다.
 
 ## 현재 단계
-C9 완료(컨텍스트와 메모리: 토큰 보기, /compact로 이력 줄이기, 세션 저장과 이어 하기, 장기 메모리, Anthropic 프롬프트 캐싱). 태그: `c0`, `c1`, `c1.1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8`, `c9`(커밋 후 태그).
+C10 완료(오케스트레이션: LangGraph로 만든 answer-check 워크플로, 승인 대기와 재개, SQLite 체크포인트, workflow 평가). 태그: `c0`, `c1`, `c1.1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8`, `c9`, `c10`(커밋 후 태그).
 
 ## 실행
 
@@ -19,6 +19,7 @@ uv run python examples/chat_walkthrough.py --scenario memory --stream   # 글자
 uv run python examples/chat_walkthrough.py --scenario mcp               # MCP 서버의 Tool을 부르는 모습(모델 없이, 서버는 실제로 띄움)
 uv run python examples/chat_walkthrough.py --scenario skill             # 스킬 본문을 load_skill로 불러 따르는 모습(모델 없이)
 uv run python examples/chat_walkthrough.py --scenario hitl              # 승인 후 실행과 거부 후 미실행을 보여 준다(모델 없이, 가짜 승인자)
+uv run python examples/chat_walkthrough.py --scenario workflow          # 고쳐 쓰기 → 승인 대기 → 새 연결로 재개(모델 없이)
 ```
 
 ### 채팅 명령
@@ -32,10 +33,26 @@ uv run python examples/chat_walkthrough.py --scenario hitl              # 승인
 | `/sessions`, `/session 번호` | 저장된 세션 목록을 보고, 번호로 골라 이어 간다. 세션은 턴마다 `data/sessions/`에 자동 저장된다 |
 | `/session-name 새이름`, `/session-new` | 지금 세션 이름 바꾸기(겹치면 거절), 새 세션 시작. 새 세션 이름은 "날짜 첫 질문 앞 20자"로 자동으로 붙는다 |
 | `/memory`, `/memory-add 내용`, `/memory-delete 번호` | 장기 메모리(`data/memory.md`, 번호 목록) 보기, 더하기, 지우기(확인 후). 메모리는 시스템 프롬프트에 들어가 모든 세션이 쓴다 |
+| `/workflows`, `/workflow 이름 요청`, `/workflow-resume 번호` | 워크플로 목록과 승인 대기 실행 보기, 시작, 승인 대기 실행 이어 가기(아래 "워크플로") |
 | `/reset`, `/history`, `/tools`, `/skills`, `/skill 이름` | 이력 비우기, 이력 보기, Tool 목록, 스킬 목록, 스킬 지침 넣기 |
 
 - 컴팩션 요약 모델은 `COMPACT_LLM_PROVIDER`, `COMPACT_LLM_MODEL`로 따로 정한다. 비워 두면 대화 모델을 쓴다.
+- 되묻기(`[질문]`)의 답 자리에 `/`로 시작하는 명령을 입력하면 답 대신 질문 취소로 처리한다. 명령은 답이 끝난 뒤 다시 입력한다.
 - Anthropic 요청은 시스템 프롬프트와 마지막 Tool 정의에 캐시 표시를 단다. OpenAI는 제공자가 자동으로 캐시한다. 캐시로 처리된 입력 토큰은 `/tokens`와 추적 리포트의 `(캐시)` 열에 나온다.
+
+### 워크플로(LangGraph)
+
+에이전트는 다음 단계를 모델이 정하고, 워크플로는 코드(그래프)가 단계의 순서와 분기를 정한다. 에이전트는 워크플로의 한 노드로 쓰인다.
+
+```
+/workflow answer-check MCP 서버는 어떻게 연결해?
+```
+
+- `answer-check`: 답 작성(에이전트, 문서 검색) → 출처 검사(코드) → 실패하면 이유를 붙여 고쳐 쓰기(최대 `WORKFLOW_MAX_REVISIONS`, 기본 2번) → 사람 승인. 상한을 넘으면 "관련 문서에서 근거를 찾지 못했습니다"로 끝난다. 문서 색인이 없으면 시작하지 않는다. 이 워크플로 안에서는 되묻기(`ask_user`)를 쓰지 않는다.
+- 진행 중에는 `▸ 답 작성`, `▸ 출처 검사: …`, `▸ 고쳐 쓰기 1/2`처럼 노드마다 한 줄씩 보인다.
+- 승인 메뉴는 `1) 승인`, `2) 거부`, `3) 다르게 요청(이유 입력)`이다. 엔터만 치면 승인 대기로 남는다. 승인 대기 상태는 `data/checkpoints.sqlite`에 저장되어 프로그램을 껐다 켜도 `/workflows`에 보이고 `/workflow-resume 번호`로 이어 간다.
+- 승인이나 근거 없음으로 끝나면 질문과 최종 답만 채팅 이력에 한 턴으로 붙는다. 초안과 고쳐 쓴 과정은 체크포인트와 추적 기록에만 남는다. 워크플로는 채팅의 앞선 대화를 보지 않는다.
+- LangGraph는 `core/orchestration/`과 `src/ai_agent_dock/workflows/`에서만 import한다(`tests/test_orchestration.py`가 확인). 함께 설치되는 langsmith는 `LANGSMITH_TRACING=true`일 때만 외부로 보내므로 `.env.example`은 `false`로 둔다.
 
 ### 평가와 추적
 
@@ -46,7 +63,7 @@ uv run evals --provider anthropic --repeat 3   # 제공자를 바꾸고, 케이�
 uv run python scripts/trace_report.py          # 세션 목록(저장된 세션은 [이름]이 붙는다). show 세션이름 또는 세션번호 / total / compare 로 통계를 본다
 ```
 
-- 평가 케이스는 `evals/cases.jsonl`에 있다(git에 올린다). 카테고리는 tool, docs, approval, clarify, skill, memory다. memory 케이스는 앞선 턴(`setup_turns`), 마지막 질문 전 컴팩션(`compact_before`), 평가용 장기 메모리(`memory_items`)를 쓴다.
+- 평가 케이스는 `evals/cases.jsonl`에 있다(git에 올린다). 카테고리는 tool, docs, approval, clarify, skill, memory, workflow다. workflow 케이스는 승인 단계의 답(`workflow_decisions`), 마지막 상태(`expect_status`), 고쳐 쓴 횟수 상한(`expect_max_revisions`)을 쓴다. memory 케이스는 앞선 턴(`setup_turns`), 마지막 질문 전 컴팩션(`compact_before`), 평가용 장기 메모리(`memory_items`)를 쓴다.
 - 판정은 규칙 기반이다. 기대한 Tool 호출, 금지 Tool, 답에 있어야 할 표현, 있으면 안 되는 표현, 출처 표기, 실행한 Tool의 오류를 본다. 목표는 100% 통과다.
 - 결과는 `data/evals/실행번호.json`에 저장되고, 직전 실행에서 통과했는데 이번에 실패한 케이스를 회귀로 표시한다.
 - 추적 기록은 `logs/sessions/세션번호.jsonl`에 세션마다 남는다. 질문, 답, Tool 인자와 결과, 입력·출력 토큰 수를 담는다. 제공자가 토큰 수를 주지 않으면 tiktoken으로 계산하고 출처 태그(`provider`, `tiktoken`)를 붙인다.
@@ -108,6 +125,8 @@ Python 3.12, 패키지 관리는 [uv](https://docs.astral.sh/uv/)를 쓴다.
 - `evals/`: 평가 케이스(`cases.jsonl`)
 - `src/ai_agent_dock/core/session/`: 대화 세션(턴 사이에 이력을 이어 간다), 세션 저장(`store.py`, `data/sessions/`), 컴팩션(`compact.py`)
 - `src/ai_agent_dock/core/memory/`: 장기 메모리(`data/memory.md`)
+- `src/ai_agent_dock/core/orchestration/`: 워크플로 실행 기반(`WorkflowRunner`: 시작, 재개, 승인 대기 찾기, 추적 기록). 체크포인트 저장 방식은 밖에서 받는다(채팅은 SQLite, 테스트와 평가는 메모리)
+- `src/ai_agent_dock/workflows/`: 워크플로 정의(`answer_check.py`). 애플리케이션이 자기 그래프를 정의하는 방식의 첫 예. core는 이 폴더를 import하지 않는다
 - `src/ai_agent_dock/core/commands.py`: 슬래시 명령(이름, 사용법, 처리). 응용은 입력을 넘기고 결과를 보여 주기만 한다
 - `src/ai_agent_dock/core/skills/`: 스킬 로더. `skills/` 폴더의 `SKILL.md`를 읽고 머리말을 검사하며, 목록 문장과 `load_skill` Tool을 만든다
 - `src/ai_agent_dock/core/tools/`: 기본 제공 Tool(계산기, 현재 시각)과 `ToolRegistry`(이름 중복 방지, 인자 검증, 결과 길이 제한)

@@ -57,7 +57,7 @@ def test_cases_with_real_model(request):
     system_prompt = build_system_prompt(skills=skills, cite_docs=knowledge is not None)
     summarize_config = config  # 컴팩션 요약도 같은 모델로 한다(평가에서는 COMPACT_LLM_* 설정을 쓰지 않는다)
 
-    def summarize(text):
+    def summarize_text(text):  # 컴팩션 요약. 평가 결과 요약(summarize)과 이름이 겹치지 않게 한다.
         return call_llm(LLMRequest(config=summarize_config, messages=[UserMessage(content=text)])).text or ""
     run_id = new_session_id("eval-")
     tracer = Tracer(ROOT / "logs" / "sessions" if env_bool("TRACE_ENABLED", True) else None, session_id=run_id)
@@ -92,7 +92,7 @@ def test_cases_with_real_model(request):
         def compactor(history):
             tools = first.tools
             count = lambda h: request_tokens(LLMRequest(config=config, messages=h, system_prompt=system_prompt, tools=tools))
-            return compact(history, keep_turns=env_int("COMPACT_KEEP_TURNS", 4), summarize=summarize, count=count)[0]
+            return compact(history, keep_turns=env_int("COMPACT_KEEP_TURNS", 4), summarize=summarize_text, count=count)[0]
 
         def workflows(settings):  # 워크플로 케이스(C10): 체크포인트는 메모리에 둔다(평가는 재개하지 않는다).
             context = WorkflowContext(settings=settings, knowledge=knowledge, max_revisions=env_int("WORKFLOW_MAX_REVISIONS", 2))

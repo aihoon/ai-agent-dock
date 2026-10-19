@@ -31,6 +31,7 @@ class WorkflowContext:
     settings: AgentSettings
     knowledge: Knowledge | None = None
     max_revisions: int = 2  # WORKFLOW_MAX_REVISIONS(C10 D8)
+    progress: Callable[[str], None] = lambda message: None  # 노드가 알리는 진행 줄(C10 D24). 응용이 화면에 보여 준다.
 
 
 @dataclass(frozen=True)

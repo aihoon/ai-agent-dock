@@ -57,6 +57,8 @@ def citation_problem(answer: str, seen: set[str]) -> str:
 
 def build(ctx: WorkflowContext) -> StateGraph:
     def write(state: State) -> State:
+        feedback = state.get("feedback")
+        ctx.progress(f"답 다시 작성 (고칠 점: {feedback[-1]})" if feedback else "답 작성")
         seen: set[str] = set()
         search = make_search_docs_tool(ctx.knowledge.store, seen)
         tools = [t for t in ctx.settings.tools if t.name not in EXCLUDED_TOOLS | {search.name}] + [search]
@@ -64,12 +66,18 @@ def build(ctx: WorkflowContext) -> StateGraph:
         return {"draft": draft, "seen": sorted(seen)}
 
     def check(state: State) -> State:
-        return {"problem": citation_problem(state.get("draft", ""), set(state.get("seen", [])))}
+        seen = set(state.get("seen", []))
+        problem = citation_problem(state.get("draft", ""), seen)
+        ctx.progress(f"출처 검사: {problem or '통과 → 사람 승인'} (검색한 출처 {len(seen)}개)")
+        return {"problem": problem}
 
     def revise(state: State) -> State:
-        return {"revisions": state.get("revisions", 0) + 1, "feedback": [*state.get("feedback", []), state["problem"]]}
+        revisions = state.get("revisions", 0) + 1
+        ctx.progress(f"고쳐 쓰기 {revisions}/{ctx.max_revisions}")
+        return {"revisions": revisions, "feedback": [*state.get("feedback", []), state["problem"]]}
 
     def give_up(state: State) -> State:
+        ctx.progress(f"고쳐 쓰기 상한({ctx.max_revisions}번)에 이르러 근거 없음으로 끝냅니다")
         return {"status": "no_evidence", "answer": f"{NO_EVIDENCE} ({state.get('problem', '')})"}
 
     def approve(state: State) -> State:

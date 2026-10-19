@@ -60,6 +60,20 @@ def test_answer_without_citation_is_revised_up_to_the_limit_then_gives_up():
     assert "[이전 답]" in retry_prompt and "출처 없음" in retry_prompt
 
 
+def test_nodes_report_progress_lines():  # C10 D24
+    lines = []
+    runner = make_runner([final("출처 없는 답"), *cited_answer()])
+    runner.context.progress = lines.append
+    runner.start("answer-check", "최대 스텝은?")
+    assert lines == [
+        "답 작성",
+        "출처 검사: 출처 없음 (검색한 출처 0개)",
+        "고쳐 쓰기 1/2",
+        "답 다시 작성 (고칠 점: 출처 없음)",
+        "출처 검사: 통과 → 사람 승인 (검색한 출처 1개)",
+    ]
+
+
 def test_reject_ends_without_an_answer_and_revise_goes_back_to_writing():
     runner = make_runner(cited_answer() + cited_answer())
     first = runner.start("answer-check", "최대 스텝은?")

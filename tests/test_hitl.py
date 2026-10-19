@@ -252,6 +252,13 @@ def test_ask_user_returns_the_answer_and_shows_the_question():
     assert "어느 파일?" in asked[0]
 
 
+def test_slash_command_as_answer_cancels_the_question():  # C10 D25
+    from ai_agent_dock.core.hitl.clarify import CANCELLED
+
+    tool = make_ask_user_tool(input_fn=lambda prompt: "/workflows")
+    assert tool.func(question="어느 파일?") == CANCELLED
+
+
 def test_model_asks_the_user_and_continues_with_the_answer():
     tool = make_ask_user_tool(input_fn=lambda prompt: "b.md")
     llm = FakeLLM([tool_call("c1", "ask_user", question="어느 파일?"), final("b.md에 쓰겠다")])
