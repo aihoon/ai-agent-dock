@@ -20,6 +20,7 @@ class TurnStats:
     duration_ms: float = 0.0  # 턴 끝 줄(turn_end)의 턴 전체 시간
     input_tokens: int = 0
     output_tokens: int = 0
+    cached_tokens: int = 0  # 입력 토큰 중 캐시에서 읽은 토큰(C9)
     estimated: int = 0  # tiktoken으로 계산한 토큰 값의 개수(제공자가 주지 않은 값)
 
 
@@ -53,11 +54,14 @@ def session_stats(session: str, lines: list[dict]) -> SessionStats:
         if kind == "session_start":
             model = line.get("model")
             continue
+        if kind not in ("turn_start", "llm", "tool", "turn_end"):
+            continue  # compact, session_resume 같은 명령 기록은 턴 통계에 넣지 않는다.
         stats = turns.setdefault(line["turn"], TurnStats(turn=line["turn"]))
         if kind == "llm":
             stats.llm_calls += 1
             stats.input_tokens += line.get("input_tokens") or 0
             stats.output_tokens += line.get("output_tokens") or 0
+            stats.cached_tokens += line.get("cached_input_tokens") or 0
             stats.estimated += (line.get("input_tokens_source") == TIKTOKEN) + (line.get("output_tokens_source") == TIKTOKEN)
         elif kind == "tool":
             stats.tool_calls += 1
@@ -76,21 +80,22 @@ def all_stats(directory: Path) -> list[SessionStats]:
     return [session_stats(session, lines) for session, lines in load_sessions(directory).items()]
 
 
-def format_list(stats: list[SessionStats]) -> str:
-    """세션 목록: 세션 수, 세션마다 시작, 끝, 턴 수."""
+def format_list(stats: list[SessionStats], names: dict[str, str] | None = None) -> str:
+    """세션 목록: 세션 수, 세션마다 시작, 끝, 턴 수. names(세션 번호 → 세션 이름)를 주면 이름도 보여 준다(C9 D26)."""
+    names = names or {}
     rows = [f"세션 {len(stats)}개"]
-    rows += [f"  {s.session}  {s.start} ~ {s.end}  턴 {len(s.turns)}" for s in stats]
+    rows += [f"  {s.session}  {s.start} ~ {s.end}  턴 {len(s.turns)}{f'  [{names[s.session]}]' if s.session in names else ''}" for s in stats]
     return "\n".join(rows)
 
 
 def format_session(s: SessionStats) -> str:
     """세션 하나의 통계: 턴별 LLM 호출 수, Tool 호출 수, 걸린 시간, 토큰 수와 합계."""
-    rows = [f"세션 {s.session} (모델 {s.model or '-'})", "  턴  LLM  Tool   시간(ms)   입력토큰  출력토큰  계산값"]
+    rows = [f"세션 {s.session} (모델 {s.model or '-'})", "  턴  LLM  Tool   시간(ms)   입력토큰  (캐시)  출력토큰  계산값"]
     for t in s.turns:
-        rows.append(f"  {t.turn:>2}  {t.llm_calls:>3}  {t.tool_calls:>4}  {t.duration_ms:>9.1f}  {t.input_tokens:>9}  {t.output_tokens:>8}  {t.estimated:>6}")
+        rows.append(f"  {t.turn:>2}  {t.llm_calls:>3}  {t.tool_calls:>4}  {t.duration_ms:>9.1f}  {t.input_tokens:>9}  {t.cached_tokens:>6}  {t.output_tokens:>8}  {t.estimated:>6}")
     rows.append(
         f"  합계 {s.total('llm_calls'):>3.0f}  {s.total('tool_calls'):>4.0f}  {s.total('duration_ms'):>9.1f}  "
-        f"{s.total('input_tokens'):>9.0f}  {s.total('output_tokens'):>8.0f}  {s.total('estimated'):>6.0f}"
+        f"{s.total('input_tokens'):>9.0f}  {s.total('cached_tokens'):>6.0f}  {s.total('output_tokens'):>8.0f}  {s.total('estimated'):>6.0f}"
     )
     return "\n".join(rows)
 
@@ -101,7 +106,7 @@ def format_total(stats: list[SessionStats]) -> str:
     if not turns:
         return "기록된 턴이 없습니다."
     rows = [f"세션 {len(stats)}개, 턴 {len(turns)}개"]
-    for name, label in [("llm_calls", "LLM 호출"), ("tool_calls", "Tool 호출"), ("duration_ms", "시간(ms)"), ("input_tokens", "입력 토큰"), ("output_tokens", "출력 토큰")]:
+    for name, label in [("llm_calls", "LLM 호출"), ("tool_calls", "Tool 호출"), ("duration_ms", "시간(ms)"), ("input_tokens", "입력 토큰"), ("cached_tokens", "캐시 입력 토큰"), ("output_tokens", "출력 토큰")]:
         total = sum(getattr(t, name) for t in turns)
         rows.append(f"  {label}: 합계 {total:,.1f}, 턴당 평균 {total / len(turns):,.1f}")
     rows.append(f"  tiktoken으로 계산한 토큰 값: {sum(t.estimated for t in turns)}개")

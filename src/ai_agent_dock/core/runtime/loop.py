@@ -15,7 +15,7 @@ from ai_agent_dock.env import env_int
 
 from ..llm import AssistantMessage, LLMRequest, Message, Tool, ToolCall, ToolMessage, UserMessage
 from ..observability import Tracer
-from .types import AgentResult, AgentSettings
+from .types import AgentResult, AgentSettings, Usage
 
 log = logging.getLogger(__name__)
 
@@ -45,6 +45,7 @@ def run_agent(settings: AgentSettings, question: str, *, history: list[Message] 
     answer: str | None = None
     denied: set[str] = set()  # 이번 턴에서 사용자가 거부한 Tool 이름. 같은 턴에서는 다시 묻지 않는다.
     tracer = settings.tracer
+    usage = Usage()  # 이번 턴의 토큰 합계(한 턴에 LLM 호출이 여러 번이면 더한다)
     turn_started = time.perf_counter()
     if tracer is not None:
         tracer.begin_turn()
@@ -66,7 +67,9 @@ def run_agent(settings: AgentSettings, question: str, *, history: list[Message] 
                 input_tokens_source=response.input_tokens_source,
                 output_tokens=response.output_tokens,
                 output_tokens_source=response.output_tokens_source,
+                cached_input_tokens=response.cached_input_tokens,
             )
+        usage.add(response)
         # 응답을 이력에 그대로 이어 붙여야 모델이 다음 호출에서 자신의 이전 판단을 본다.
         history.append(
             AssistantMessage(content=response.text, tool_calls=response.tool_calls, raw=response.raw)
@@ -75,7 +78,7 @@ def run_agent(settings: AgentSettings, question: str, *, history: list[Message] 
 
         if not response.tool_calls:
             log.info("step %d: 최종 답변", step)
-            return _finish(tracer, turn_started, AgentResult(answer=answer, status="completed", steps=step, history=history))
+            return _finish(tracer, turn_started, AgentResult(answer=answer, status="completed", steps=step, history=history, usage=usage))
 
         for call in response.tool_calls:
             started = time.perf_counter()
@@ -94,7 +97,7 @@ def run_agent(settings: AgentSettings, question: str, *, history: list[Message] 
 
     # 모델이 끝까지 Tool만 요청했다. 마지막 응답 텍스트(없을 수 있음)와 함께 종료 사유를 알린다.
     log.warning("최대 스텝(%d)에 도달해 종료", max_steps)
-    return _finish(tracer, turn_started, AgentResult(answer=answer, status="max_steps", steps=max_steps, history=history))
+    return _finish(tracer, turn_started, AgentResult(answer=answer, status="max_steps", steps=max_steps, history=history, usage=usage))
 
 
 def _ms_since(started: float) -> float:

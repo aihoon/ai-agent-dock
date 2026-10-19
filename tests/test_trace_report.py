@@ -52,3 +52,20 @@ def test_total_sums_all_sessions_and_averages_per_turn(tmp_path):
 def test_compare_has_one_row_per_session(tmp_path):
     text = format_compare(make(tmp_path))
     assert len(text.splitlines()) == 3 and "20261018-110000-bbbb" in text
+
+
+def test_cached_tokens_are_summed_and_command_records_are_not_turns(tmp_path):
+    rows = [
+        {"session": "s", "time": "t", "turn": 1, "kind": "llm", "input_tokens": 2010, "output_tokens": 5, "cached_input_tokens": 2000},
+        {"session": "s", "time": "t", "turn": 1, "kind": "compact", "before_tokens": 10, "after_tokens": 5},
+        {"session": "s", "time": "t", "turn": 1, "kind": "session_rename", "old_name": "a", "new_name": "b"},
+    ]
+    (tmp_path / "s.jsonl").write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
+    stats = all_stats(tmp_path)[0]
+    assert stats.total("cached_tokens") == 2000 and stats.total("llm_calls") == 1
+    assert "캐시 입력 토큰: 합계 2,000.0" in format_total([stats])
+
+
+def test_list_shows_saved_session_names(tmp_path):
+    text = format_list(make(tmp_path), {"20261018-100000-aaaa": "고래 테스트"})
+    assert "20261018-100000-aaaa" in text and "[고래 테스트]" in text and text.count("[") == 1

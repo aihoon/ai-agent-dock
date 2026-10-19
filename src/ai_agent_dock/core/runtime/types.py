@@ -16,6 +16,20 @@ from .prompt import DEFAULT_SYSTEM_PROMPT  # AgentSettings.system_prompt의 기�
 
 
 @dataclass
+class Usage:
+    """토큰 사용량 합계. 입력은 캐시분을 포함한다."""
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cached_input_tokens: int = 0
+
+    def add(self, response: LLMResponse | Usage) -> None:
+        self.input_tokens += response.input_tokens or 0
+        self.output_tokens += response.output_tokens or 0
+        self.cached_input_tokens += response.cached_input_tokens or 0
+
+
+@dataclass
 class AgentResult:
     """run_agent의 결과."""
 
@@ -23,6 +37,7 @@ class AgentResult:
     status: str  # "completed"(최종 답변으로 종료) 또는 "max_steps"(최대 스텝 도달로 종료)
     steps: int  # 모델을 호출한 횟수
     history: list[Message]
+    usage: Usage = field(default_factory=Usage)  # 이번 턴의 토큰 합계(/tokens가 쓴다)
 
 
 @dataclass

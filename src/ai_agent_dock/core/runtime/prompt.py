@@ -1,6 +1,6 @@
 """시스템 프롬프트 조립: 기본 지침, 스킬 목록, 출처 규칙을 이 파일에서만 이어 붙인다.
 
-순서는 항상 같다: 기본 지침 → 스킬 목록(스킬이 있을 때) → 출처 규칙(문서 검색을 켰을 때).
+순서는 항상 같다: 기본 지침 → 장기 메모리(있을 때) → 스킬 목록(스킬이 있을 때) → 출처 규칙(문서 검색을 켰을 때).
 진입점(chat, cli 등)은 필요한 조각을 골라 넘기기만 하고, 조각을 직접 이어 붙이지 않는다.
 """
 
@@ -21,7 +21,11 @@ DEFAULT_SYSTEM_PROMPT = (
 
 
 def build_system_prompt(
-    *, skills: list[SkillMeta] | None = None, cite_docs: bool = False, base: str = DEFAULT_SYSTEM_PROMPT
+    *,
+    skills: list[SkillMeta] | None = None,
+    cite_docs: bool = False,
+    memory: list[str] | None = None,
+    base: str = DEFAULT_SYSTEM_PROMPT,
 ) -> str:
     """시스템 프롬프트 문자열을 만든다.
 
@@ -29,6 +33,8 @@ def build_system_prompt(
     base를 주면 기본 지침 대신 그 문장을 쓴다(테스트나 특수한 예제용).
     """
     parts = [base]
+    if memory:  # 장기 메모리는 기본 지침 바로 뒤에 넣는다(C9 D20). 없으면 넣지 않는다.
+        parts.append("사용자가 남긴 장기 메모리(세션이 바뀌어도 기억할 사실):\n" + "\n".join(f"- {item}" for item in memory))
     index = build_index(skills or [])
     if index:
         parts.append(index)

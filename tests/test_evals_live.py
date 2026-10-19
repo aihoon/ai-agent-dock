@@ -11,7 +11,9 @@ import pytest
 from dotenv import load_dotenv
 
 from ai_agent_dock.core.evals import evaluate, last_passed, load_cases, regressions, save_run, scripted_approver, scripted_input, summarize
-from ai_agent_dock.core.llm import config_from_env
+from ai_agent_dock.core.llm import LLMRequest, UserMessage, call_llm, config_from_env
+from ai_agent_dock.core.llm.tokens import request_tokens
+from ai_agent_dock.core.session.compact import compact
 from ai_agent_dock.core.observability import Tracer, new_session_id
 from ai_agent_dock.core.retrieval import open_knowledge
 from ai_agent_dock.core.runtime.prompt import build_system_prompt
@@ -50,6 +52,10 @@ def test_cases_with_real_model(request):
     skills = scan_skills(ROOT / "skills")
     knowledge = open_knowledge(ROOT / "data" / "index.sqlite")
     system_prompt = build_system_prompt(skills=skills, cite_docs=knowledge is not None)
+    summarize_config = config  # 컴팩션 요약도 같은 모델로 한다(평가에서는 COMPACT_LLM_* 설정을 쓰지 않는다)
+
+    def summarize(text):
+        return call_llm(LLMRequest(config=summarize_config, messages=[UserMessage(content=text)])).text or ""
     run_id = new_session_id("eval-")
     tracer = Tracer(ROOT / "logs" / "sessions" if env_bool("TRACE_ENABLED", True) else None, session_id=run_id)
 
@@ -62,10 +68,11 @@ def test_cases_with_real_model(request):
                 registry.add(tool, source=source)
             for server, tools in mcp_tools.items():
                 registry.add_all(tools, source=f"mcp:{server}")
+            prompt = build_system_prompt(skills=skills, cite_docs=knowledge is not None, memory=case.memory_items)
             return AgentSettings(
                 config=config,
                 tools=registry.tools(),
-                system_prompt=system_prompt,
+                system_prompt=prompt,
                 approve=scripted_approver(case.approvals),
                 tracer=tracer,
             )
@@ -79,7 +86,12 @@ def test_cases_with_real_model(request):
             model=config.model,
             max_steps=first.max_steps,
         )
-        results = [evaluate(case, make_settings, repeat) for case in cases]
+        def compactor(history):
+            tools = first.tools
+            count = lambda h: request_tokens(LLMRequest(config=config, messages=h, system_prompt=system_prompt, tools=tools))
+            return compact(history, keep_turns=env_int("COMPACT_KEEP_TURNS", 4), summarize=summarize, count=count)[0]
+
+        results = [evaluate(case, make_settings, repeat, compactor=compactor) for case in cases]
 
     results_dir = ROOT / "data" / "evals"
     previous = last_passed(results_dir)  # 저장하기 전에 직전 실행을 읽는다.

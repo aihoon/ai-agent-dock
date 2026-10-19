@@ -93,3 +93,5 @@ class LLMResponse:
     output_tokens: int | None = None
     input_tokens_source: str | None = None
     output_tokens_source: str | None = None
+    # 입력 토큰 중 제공자 캐시에서 읽은 수. 제공자가 주지 않으면 None이다(추정하지 않는다).
+    cached_input_tokens: int | None = None

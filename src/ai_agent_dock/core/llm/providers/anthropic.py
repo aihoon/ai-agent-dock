@@ -76,8 +76,15 @@ def to_messages(history: list[Message]) -> list[dict[str, Any]]:
     return out
 
 
+CACHE = {"type": "ephemeral"}  # 프롬프트 캐시 표시. 이 블록까지의 앞부분을 제공자가 캐시한다.
+
+
 def to_tools(tools: list[Tool]) -> list[dict[str, Any]]:
-    return [{"name": t.name, "description": t.description, "input_schema": t.parameters} for t in tools]
+    """Tool 정의 목록. 마지막 Tool에 캐시 표시를 달아 Tool 정의 전체가 캐시되게 한다."""
+    out: list[dict[str, Any]] = [{"name": t.name, "description": t.description, "input_schema": t.parameters} for t in tools]
+    if out:
+        out[-1]["cache_control"] = CACHE
+    return out
 
 
 def parse(response: Any) -> LLMResponse:
@@ -99,9 +106,20 @@ def parse(response: Any) -> LLMResponse:
         text=text,
         tool_calls=calls,
         raw=list(response.content),
-        input_tokens=usage.input_tokens if usage else None,
+        input_tokens=_total_input(usage),
         output_tokens=usage.output_tokens if usage else None,
+        cached_input_tokens=getattr(usage, "cache_read_input_tokens", None) if usage else None,
     )
+
+
+def _total_input(usage: Any) -> int | None:
+    """입력 토큰 합계. Anthropic의 input_tokens는 캐시에서 읽거나 캐시에 쓴 부분을 따로 센다.
+
+    OpenAI처럼 캐시분을 포함한 입력 토큰으로 맞추려고 세 값을 더한다.
+    """
+    if usage is None:
+        return None
+    return usage.input_tokens + (getattr(usage, "cache_read_input_tokens", None) or 0) + (getattr(usage, "cache_creation_input_tokens", None) or 0)
 
 
 def config_from_env() -> LLMConfig:
@@ -123,7 +141,8 @@ def build_request(request: LLMRequest) -> dict[str, Any]:
     if request.tools:
         kwargs["tools"] = to_tools(request.tools)
     if request.system_prompt:
-        kwargs["system"] = request.system_prompt
+        # 시스템 프롬프트를 블록으로 보내야 캐시 표시를 달 수 있다. 매 요청마다 전체를 보내고, 같은 앞부분이면 제공자가 재사용한다.
+        kwargs["system"] = [{"type": "text", "text": request.system_prompt, "cache_control": CACHE}]
     return kwargs
 
 

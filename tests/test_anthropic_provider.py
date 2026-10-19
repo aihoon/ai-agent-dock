@@ -48,8 +48,8 @@ def test_to_tools_uses_input_schema():
     schema = {"type": "object", "properties": {}}
 
     assert to_tools([Tool("t", "설명", schema, lambda: None)]) == [
-        {"name": "t", "description": "설명", "input_schema": schema}
-    ]
+        {"name": "t", "description": "설명", "input_schema": schema, "cache_control": {"type": "ephemeral"}}
+    ]  # 마지막 Tool에 캐시 표시가 붙는다(C9 D21)
 
 
 def test_parse_extracts_text_and_tool_use():
@@ -111,4 +111,4 @@ def test_build_request_reflects_request_fields():
 
     assert request["model"] == "my-model"
     assert request["max_tokens"] == 2048
-    assert request["system"] == "시스템"
+    assert request["system"] == [{"type": "text", "text": "시스템", "cache_control": {"type": "ephemeral"}}]  # 캐시 표시(C9 D21)

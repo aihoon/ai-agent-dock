@@ -77,3 +77,9 @@ def test_missing_values_are_counted_with_tiktoken_and_tagged():
     response = fill_tokens(request, LLMResponse(text=None, tool_calls=[ToolCall(id="c", name="calculate", arguments={"expression": "17*23"})]))
     assert response.input_tokens > 0 and response.output_tokens > 0
     assert (response.input_tokens_source, response.output_tokens_source) == (TIKTOKEN, TIKTOKEN)
+
+
+def test_no_trace_file_until_the_first_turn(tmp_path):
+    tracer = Tracer(tmp_path)
+    Session(AgentSettings(config=TEST_CONFIG, tools=BUILTIN_TOOLS, llm=FakeLLM([]), tracer=tracer))
+    assert not tracer.path.exists()  # 질문 없이 끝나면 "턴 0" 세션이 남지 않는다(C9 D27).

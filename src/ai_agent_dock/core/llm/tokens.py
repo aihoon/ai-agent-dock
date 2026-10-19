@@ -39,6 +39,11 @@ def _request_text(request: LLMRequest) -> str:
     return "\n".join(parts)
 
 
+def request_tokens(request: LLMRequest) -> int:
+    """다음 호출에 보낼 토큰 수(시스템 프롬프트, 이력, Tool 정의)를 tiktoken으로 센다. /tokens의 이력 크기와 컴팩션 기준에 쓴다."""
+    return count(_request_text(request))
+
+
 def _response_text(response: LLMResponse) -> str:
     """출력 토큰을 셀 대상: 답 텍스트와 툴 요청."""
     parts = [response.text or ""]

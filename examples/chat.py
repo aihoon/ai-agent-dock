@@ -7,7 +7,7 @@
   uv run python examples/chat.py --no-stream           # 일괄 응답(생략하면 .env의 AGENT_STREAM, 없으면 스트리밍)
   uv run python examples/chat.py --mcp-config mcp.json # MCP 서버의 Tool도 함께 사용(생략하면 .env의 MCP_CONFIG)
 
-명령: /exit(종료), /reset(대화 이력 비우기), /history(이력 보기), /tools(사용 중인 Tool 보기), /help(명령 목록)
+명령: /help로 목록을 본다. /exit와 /help는 이 파일에, 나머지 명령은 core/commands.py에 있다.
 스트리밍이면 답의 글자를 도착하는 대로 보여 주고, 일괄 응답이면 턴이 끝난 뒤 한 번에 보여 준다.
 어느 쪽이든 진행 상황(모델 호출, Tool 실행)은 한 줄씩 보여 준다. 턴 도중 Ctrl+C는 그 턴만 취소한다.
 """
@@ -21,25 +21,27 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from ai_agent_dock.core.llm import Message, Tool, call_llm, config_from_env
+from ai_agent_dock.core.commands import CommandContext, find_command, help_text
+from ai_agent_dock.core.hitl import AuditLog, ask_in_terminal
+from ai_agent_dock.core.llm import LLMRequest, Tool, UserMessage, call_llm, config_from_env
+from ai_agent_dock.core.memory import MemoryStore
 from ai_agent_dock.core.observability import Tracer
+from ai_agent_dock.core.retrieval import Knowledge, check_citations, open_knowledge
 from ai_agent_dock.core.runtime.prompt import build_system_prompt
 from ai_agent_dock.core.runtime.types import AgentSettings
 from ai_agent_dock.core.session import Session
-from ai_agent_dock.core.hitl import AuditLog, ask_in_terminal
-from ai_agent_dock.core.retrieval import Knowledge, check_citations, open_knowledge
-from ai_agent_dock.core.skills import SkillMeta, read_skill, scan_skills
+from ai_agent_dock.core.session.store import SessionStore
+from ai_agent_dock.core.skills import SkillMeta, scan_skills
 from ai_agent_dock.core.toolkit import make_builtin_tools
 from ai_agent_dock.core.tools import DEFAULT_MAX_RESULT_CHARS, ToolRegistry
 from ai_agent_dock.env import env_bool, env_float, env_int, env_str
 
 AUDIT_PATH = Path(__file__).resolve().parent.parent / "logs" / "audit.jsonl"  # 실행 기록(감사 로그). logs/는 git에서 제외한다.
 TRACE_DIR = Path(__file__).resolve().parent.parent / "logs" / "sessions"  # 추적 기록(세션별 파일). TRACE_ENABLED=false면 쓰지 않는다.
-HELP = (
-    "/exit 종료 | /reset 대화 이력 비우기 | /history 이력 보기 | /tools 사용 중인 Tool 보기 | "
-    "/skills 스킬 목록 | /skill 이름 스킬 지침 넣기 | /help 명령 목록"
-)
-SHOW = 80  # /history에서 한 항목을 이만큼만 보여 준다.
+APP_COMMANDS = [("/help", "명령 목록 보기"), ("/exit", "종료")]  # 응용에만 있는 명령. 나머지 명령은 core/commands.py에 있다(C9 D25).
+HELP = help_text(APP_COMMANDS)
+SESSIONS_DIR = Path(__file__).resolve().parent.parent / "data" / "sessions"  # 세션 저장(이어 하기용). data/는 git에서 제외한다.
+MEMORY_PATH = Path(__file__).resolve().parent.parent / "data" / "memory.md"  # 장기 메모리. data/는 git에서 제외한다.
 SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"  # 프로젝트 루트의 skills/
 KNOWLEDGE_DIR = Path(__file__).resolve().parent.parent / "knowledge"  # 프로젝트 루트의 knowledge/(검색할 문서)
 INDEX_PATH = Path(__file__).resolve().parent.parent / "data" / "index.sqlite"  # 문서 색인(문서에서 다시 만들 수 있다). data/는 git에서 제외한다.
@@ -86,25 +88,6 @@ class Progress:
             return tool.func(**kwargs)
 
         return replace(tool, func=traced)
-
-
-def brief(message: Message) -> str:
-    text = (message.content or "").replace("\n", " ")
-    text = text if len(text) <= SHOW else text[:SHOW] + "…"
-    if message.role == "assistant" and message.tool_calls:
-        text += f" [Tool 요청: {', '.join(c.name for c in message.tool_calls)}]"
-    if message.role == "tool" and message.is_error:
-        text = "(오류) " + text
-    return f"{message.role:9s}: {text}"
-
-
-def describe_tool(tool: Tool, source: str) -> str:
-    """Tool 하나를 `이름(인자, ...) [출처]`와 설명 두 줄로 설명한다. 필수 인자 뒤에는 *를 붙인다."""
-    schema = tool.parameters
-    required = set(schema.get("required", []))
-    args = ", ".join(f"{name}{'*' if name in required else ''}" for name in schema.get("properties", {}))
-    first_line = (tool.description.splitlines() or [""])[0]  # 외부 서버의 설명은 길 수 있어 첫 줄만 보여 준다.
-    return f"{tool.name}({args})  [{source}]\n      {first_line[: 2 * SHOW]}"
 
 
 def main():
@@ -154,7 +137,12 @@ def main():
         except ValueError as e:  # 설정 파일 오류, Tool 이름 겹침 등
             raise SystemExit(f"설정 오류: {e}")
         audit = AuditLog(AUDIT_PATH)
-        system_prompt = build_system_prompt(skills=skills, cite_docs=knowledge is not None)
+        memory = MemoryStore(MEMORY_PATH)
+
+        def make_prompt() -> str:  # 메모리가 바뀌면 다시 조립한다(다음 턴부터 반영, C9 D20).
+            return build_system_prompt(skills=skills, cite_docs=knowledge is not None, memory=memory.items())
+
+        system_prompt = make_prompt()
         settings = AgentSettings(
             config=config,
             tools=[progress.wrap_tool(t) for t in registry.tools()],
@@ -166,7 +154,20 @@ def main():
             tracer=Tracer(TRACE_DIR if env_bool("TRACE_ENABLED", True) else None),
         )
         session = Session(settings)
-        repl(session, registry, progress, stream, skills, knowledge, audit)
+        ctx = CommandContext(
+            session=session,
+            registry=registry,
+            skills=skills,
+            store=SessionStore(SESSIONS_DIR),
+            memory=memory,
+            make_prompt=make_prompt,
+            summarize=make_summarizer(config),
+            knowledge=knowledge,
+            keep_turns=env_int("COMPACT_KEEP_TURNS", 4),
+            compact_warn_tokens=env_int("COMPACT_WARN_TOKENS", 100_000),
+            memory_warn_tokens=env_int("MEMORY_WARN_TOKENS", 2_000),
+        )
+        repl(session, ctx, progress, stream)
 
 
 def build_registry(args, stack: ExitStack, *, skills: list[SkillMeta], knowledge: Knowledge | None) -> ToolRegistry:
@@ -194,6 +195,20 @@ def build_registry(args, stack: ExitStack, *, skills: list[SkillMeta], knowledge
     return registry
 
 
+def make_summarizer(config):
+    """컴팩션 요약 함수. COMPACT_LLM_PROVIDER, COMPACT_LLM_MODEL이 비어 있으면 대화 모델을 쓴다(C9 D8)."""
+    provider = env_str("COMPACT_LLM_PROVIDER", "") or config.provider
+    compact_config = config_from_env(provider) if provider != config.provider else config
+    model = env_str("COMPACT_LLM_MODEL", "")
+    if model:
+        compact_config = replace(compact_config, model=model)
+
+    def summarize(text: str) -> str:
+        return call_llm(LLMRequest(config=compact_config, messages=[UserMessage(content=text)])).text or ""
+
+    return summarize
+
+
 def report_citations(answer: str | None, seen: set[str], searched: bool) -> None:
     """답의 출처를 검색 결과와 대조해 지어낸 출처와 출처 누락을 알린다. 이번 턴에 검색했을 때만 누락을 알린다."""
     check = check_citations(answer or "", seen)
@@ -203,15 +218,8 @@ def report_citations(answer: str | None, seen: set[str], searched: bool) -> None
         print("※ 문서를 검색했지만 답에 출처가 없습니다.")
 
 
-def repl(
-    session: Session,
-    registry: ToolRegistry,
-    progress: Progress,
-    stream: bool,
-    skills: list[SkillMeta],
-    knowledge: Knowledge | None = None,
-    audit: AuditLog | None = None,
-) -> None:
+def repl(session: Session, ctx: CommandContext, progress: Progress, stream: bool) -> None:
+    knowledge, audit = ctx.knowledge, session.settings.audit
     print(f"대화를 시작합니다({'스트리밍' if stream else '일괄 응답'}). 명령을 보려면 /help 를 입력하세요.")
     while True:
         try:
@@ -224,38 +232,19 @@ def repl(
         if line.startswith("/"):
             if line == "/exit":
                 break
-            elif line == "/reset":
-                session.reset()
-                if knowledge:
-                    knowledge.seen.clear()  # 이력과 함께 검색 출처도 비운다.
-                print("대화 이력을 비웠습니다.")
-            elif line == "/history":
-                print(f"(메시지 {len(session.history)}개)")
-                for m in session.history:
-                    print(f"  {brief(m)}")
-            elif line == "/tools":
-                print(f"(Tool {len(session.settings.tools)}개, *는 필수 인자)")
-                for t in session.settings.tools:
-                    print(f"  {describe_tool(t, registry.source_of(t.name))}")
-            elif line == "/skills":
-                if not skills:
-                    print("스킬이 없습니다(skills/ 폴더에 SKILL.md를 추가하세요).")
-                for m in skills:
-                    print(f"  {m.name}: {m.description}")
-            elif line == "/skill":
-                print("사용법: /skill 이름 (목록은 /skills)")
-            elif line.startswith("/skill "):
-                name = line[len("/skill ") :].strip()
-                match = next((m for m in skills if m.name == name), None)
-                if match is None:
-                    print(f"없는 스킬: {name!r}. 목록은 /skills 로 보세요.")
-                else:
-                    session.add_user_message(f"다음 스킬의 지침을 따라 이후 답하라: {match.name}\n\n{read_skill(match).body}")
-                    print(f"스킬 '{match.name}'의 지침을 대화에 넣었습니다. 이어서 질문하세요.")
-            elif line == "/help":
+            if line == "/help":
                 print(HELP)
-            else:
-                print(f"알 수 없는 명령입니다: {line}  ({HELP})")
+                continue
+            found = find_command(line)
+            if found is None:
+                print(f"알 수 없는 명령입니다: {line}\n{HELP}")
+                continue
+            command, arg = found
+            question = command.confirm(ctx, arg) if command.confirm else None
+            if question and input(f"{question} (y/N): ").strip().lower() != "y":
+                print("취소했습니다.")
+                continue
+            print(command.run(ctx, arg))
             continue
 
         progress.begin_turn()
@@ -277,6 +266,9 @@ def repl(
             print(result.answer or "(답변 없음)")
         if knowledge:
             report_citations(result.answer, knowledge.seen, len(knowledge.calls) > calls_before)
+        notice = ctx.after_turn(line)  # 턴마다 자동 저장하고, 이력이 기준보다 크면 안내한다.
+        if notice:
+            print(notice)
         if result.status == "max_steps":
             print(f"※ 최대 스텝({result.steps})에 도달해 중단되었습니다. 이어서 '계속해'라고 말해 보세요.")
 

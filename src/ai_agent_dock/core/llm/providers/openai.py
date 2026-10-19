@@ -105,6 +105,8 @@ def parse(response: Any) -> LLMResponse:
         raw=list(response.output),
         input_tokens=usage.input_tokens if usage else None,
         output_tokens=usage.output_tokens if usage else None,
+        # OpenAI는 긴 앞부분을 자동으로 캐시한다. input_tokens에는 캐시분이 포함되어 있다.
+        cached_input_tokens=getattr(getattr(usage, "input_tokens_details", None), "cached_tokens", None),
     )
 
 

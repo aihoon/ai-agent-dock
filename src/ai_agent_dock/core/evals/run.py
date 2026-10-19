@@ -7,11 +7,11 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
 from ..hitl import Approval
-from ..llm import ToolCall
+from ..llm import Message, ToolCall
 from ..runtime.loop import run_agent
 from ..runtime.types import AgentSettings
 from .score import Case, called_tools, check
@@ -51,11 +51,27 @@ def scripted_input(answers: list[str]) -> Callable[[str], str]:
     return lambda prompt: remaining.pop(0) if remaining else ""
 
 
-def evaluate(case: Case, make_settings: Callable[[Case], AgentSettings], repeat: int = 1) -> CaseResult:
-    """케이스를 repeat번 실행한다. 실행마다 설정을 새로 만든다(미리 적은 답이 실행마다 처음부터 쓰이도록)."""
+def evaluate(
+    case: Case,
+    make_settings: Callable[[Case], AgentSettings],
+    repeat: int = 1,
+    compactor: Callable[[list[Message]], list[Message]] | None = None,
+) -> CaseResult:
+    """케이스를 repeat번 실행한다. 실행마다 설정을 새로 만든다(미리 적은 답이 실행마다 처음부터 쓰이도록).
+
+    setup_turns가 있으면 앞선 턴을 먼저 보내고, compact_before면 마지막 질문 전에 compactor로 이력을 줄인다.
+    판정은 마지막 질문의 턴만 본다(앞선 턴의 Tool 호출은 세지 않는다).
+    """
     outcome = CaseResult(id=case.id, category=case.category, runs=repeat, passes=0)
     for _ in range(repeat):
-        result = run_agent(make_settings(case), case.question)
+        settings = make_settings(case)
+        history: list[Message] = []
+        for question in case.setup_turns:
+            history = run_agent(settings, question, history=history).history
+        if case.compact_before and compactor is not None:
+            history = compactor(history)
+        full = run_agent(settings, case.question, history=history)
+        result = replace(full, history=full.history[len(history):])
         failures = check(case, result)
         outcome.tools = called_tools(result)
         outcome.answer = result.answer

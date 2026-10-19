@@ -31,6 +31,9 @@ class Case:
     expect_citation: bool | None = None  # True면 출처가 있어야 하고, False면 없어야 하고, None이면 보지 않는다.
     approvals: dict[str, str] = field(default_factory=dict)  # 툴 이름 → 미리 적는 승인 답(approve 또는 deny). 적지 않은 툴은 승인한다. 실행기가 쓴다.
     user_inputs: list[str] = field(default_factory=list)  # 되묻기 케이스에서 사용자 답으로 미리 적는 값. 실행기가 쓴다.
+    setup_turns: list[str] = field(default_factory=list)  # 마지막 질문 전에 보낼 사용자 질문들(memory 케이스)
+    compact_before: bool = False  # 마지막 질문 전에 컴팩션을 실행한다
+    memory_items: list[str] = field(default_factory=list)  # 평가 동안만 쓰는 장기 메모리(실제 data/memory.md는 건드리지 않는다)
 
 
 def load_cases(path: Path) -> list[Case]:
