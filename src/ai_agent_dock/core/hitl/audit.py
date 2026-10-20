@@ -1,6 +1,6 @@
 """감사 로그: Tool 실행 시도와 결정을 JSON Lines 파일에 한 줄씩 남긴다.
 
-인자 값은 ARG_CHARS 글자까지만 남긴다. 비밀값이 그대로 새지 않게 하려는 최소한의 조치다(전체 마스킹은 C11).
+인자 값은 키와 개인정보를 가린 뒤 ARG_CHARS 글자까지만 남긴다(C11 D5).
 """
 
 from __future__ import annotations
@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+from ..safety.mask import mask_text
 
 ARG_CHARS = 20
 
@@ -38,7 +40,7 @@ class AuditLog:
             "tool": tool,
             "risk": risk,
             "decision": decision,  # "auto"(자동 실행), "approve", "deny", "revise"
-            "args": {key: str(value)[:ARG_CHARS] for key, value in arguments.items()},
+            "args": {key: mask_text(str(value))[:ARG_CHARS] for key, value in arguments.items()},  # 가린 뒤 자른다(C11 D5)
             "result_chars": result_chars,
             "is_error": is_error,
         }

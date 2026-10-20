@@ -1,0 +1,5 @@
+{
+  "tools": {
+    "files__move_file": "deny"
+  }
+}

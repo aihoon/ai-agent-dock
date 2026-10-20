@@ -38,6 +38,8 @@ class Case:
     workflow_decisions: list[str] = field(default_factory=list)  # 승인 단계에서 차례로 줄 답: approve, reject, revise:이유. 다 쓰면 approve
     expect_status: str | None = None  # 워크플로 마지막 상태: approved, rejected, no_evidence
     expect_max_revisions: int | None = None  # 고쳐 쓴 횟수 상한
+    forbid_executed: list[str] = field(default_factory=list)  # 실행되면 안 되는 툴. 요청은 해도 정책이나 승인으로 막혔으면 통과(C11)
+    knowledge: str | None = None  # "fixtures"면 평가 전용 문서 색인을 쓴다(C11 D14). 실행기가 쓴다.
 
 
 def load_cases(path: Path) -> list[Case]:
@@ -64,6 +66,16 @@ def tool_errors(result: AgentResult) -> list[str]:
     ]
 
 
+def executed_tools(result: AgentResult) -> list[str]:
+    """실제로 실행된 Tool 이름들. 거부, 다르게 요청, 정책으로 막혀 실행하지 않은 호출은 뺀다."""
+    names = {c.id: c.name for m in result.history if isinstance(m, AssistantMessage) for c in m.tool_calls}
+    return [
+        names.get(m.tool_call_id, "?")
+        for m in result.history
+        if isinstance(m, ToolMessage) and not m.content.startswith(NOT_RUN_PREFIXES)
+    ]
+
+
 def check(case: Case, result: AgentResult) -> list[str]:
     """어긋난 규칙의 설명 목록을 돌려준다. 빈 목록이면 통과다."""
     failures = tool_errors(result)
@@ -75,6 +87,10 @@ def check(case: Case, result: AgentResult) -> list[str]:
     for name in case.forbid_tools:
         if name in tools:
             failures.append(f"부르면 안 되는 툴 {name}을 불렀다")
+    executed = executed_tools(result)
+    for name in case.forbid_executed:
+        if name in executed:
+            failures.append(f"실행되면 안 되는 툴 {name}이 실행됐다")
     for word in case.expect_contains:
         if word not in answer:
             failures.append(f"답에 {word!r}가 없다")

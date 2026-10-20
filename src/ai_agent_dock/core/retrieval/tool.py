@@ -35,5 +35,6 @@ def make_search_docs_tool(
         },
         read_only=True,
         trusted=True,
+        untrusted_output=True,  # 문서 내용은 외부 내용이다(C11 D9).
         func=search_docs,
     )

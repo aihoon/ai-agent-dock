@@ -26,6 +26,7 @@ class Tool:
     func: Callable[..., Any]
     read_only: bool = False  # 읽기 전용 표시(MCP는 서버가 준 readOnlyHint). 기본은 False.
     trusted: bool = False  # 이 툴을 제공하는 서버를 신뢰하는지(mcp.json의 trusted, 빌트인은 True로 명시). 기본은 믿지 않는다. 자동 실행은 read_only와 trusted가 모두 True일 때만 한다.
+    untrusted_output: bool = False  # 결과가 외부 내용(파일, 문서, MCP 결과)인지. True면 결과를 <untrusted> 경계로 감싼다(C11 D9).
 
 
 @dataclass

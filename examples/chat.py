@@ -32,6 +32,8 @@ from ai_agent_dock.core.orchestration import WorkflowContext, WorkflowRunner
 from ai_agent_dock.core.retrieval import Knowledge, check_citations, open_knowledge
 from ai_agent_dock.core.runtime.prompt import build_system_prompt
 from ai_agent_dock.core.runtime.types import AgentSettings
+from ai_agent_dock.core.hooks import load_hooks
+from ai_agent_dock.core.safety import Safety, load_safety_policy, with_safety
 from ai_agent_dock.core.session import Session
 from ai_agent_dock.core.session.store import SessionStore
 from ai_agent_dock.core.skills import SkillMeta, scan_skills
@@ -78,6 +80,13 @@ class Progress:
     def _say(self, message: str):
         self.end_line()
         print(message, flush=True)
+
+    def say(self, message: str):
+        self._say(message)
+
+    def blocked(self, name: str, reason: str):
+        """정책이 Tool을 막았을 때(C11 D15). 승인 메뉴 없이 한 줄만 보여 준다."""
+        self._say(f"  ⛔ 안전 정책으로 막았습니다: {name} ({reason})")
 
     def workflow_step(self, message: str):
         """워크플로 노드가 알린 줄(C10 D24). 노드마다 스텝 번호를 새로 센다."""
@@ -159,10 +168,36 @@ def main():
             system_prompt=system_prompt,
             max_steps=args.max_steps,
             llm=llm,
-            approve=lambda call: ask_in_terminal(call, interactive=sys.stdin.isatty()),
+            approve=lambda call: ask_in_terminal(call, interactive=sys.stdin.isatty(), notice=safety.notice()),
             audit=audit,
             tracer=Tracer(TRACE_DIR if env_bool("TRACE_ENABLED", True) else None),
         )
+        try:  # Safety는 항상 켠다. 안전 정책 파일만 SAFETY_CONFIG로 고른다(C11 D17, D25).
+            policy_path = env_str("SAFETY_CONFIG", "")
+            if policy_path and not Path(policy_path).is_file():
+                print(f"⚠ 안전 정책 파일이 없어 정책 없이 시작합니다: {policy_path} (safety.example.json을 복사하세요)")
+                policy_path = ""
+            policy = load_safety_policy(policy_path) if policy_path else None
+            settings, safety = with_safety(settings, policy=policy, on_block=progress.blocked)
+        except (OSError, ValueError) as e:
+            raise SystemExit(f"안전 정책 설정 오류: {e}")
+        if policy:
+            print(f"안전 정책을 적용했습니다({policy_path}, Tool {len(policy.rules)}개).")
+        hooks_path = env_str("HOOKS_CONFIG", "")
+        if hooks_path and not Path(hooks_path).is_file():
+            print(f"⚠ Hook 설정 파일이 없어 Hook 없이 시작합니다: {hooks_path} (hooks.example.json을 복사하세요)")
+            hooks_path = ""
+        if hooks_path:  # 사용자가 설치한 Hook(C11 D20)
+            try:
+                settings.hooks = load_hooks(
+                    hooks_path,
+                    timeout=env_float("HOOK_TIMEOUT", 10.0),
+                    record=lambda **fields: settings.tracer.record("hook", None, **fields),
+                    warn=progress.say,
+                )
+            except (OSError, ValueError) as e:
+                raise SystemExit(f"Hook 설정 오류: {e}")
+            print(f"Hook {len(settings.hooks.specs)}개를 설치했습니다({hooks_path}).")
         session = Session(settings)
         ctx = CommandContext(
             session=session,
@@ -178,7 +213,7 @@ def main():
             memory_warn_tokens=env_int("MEMORY_WARN_TOKENS", 2_000),
             workflows=make_workflows(stack, settings, knowledge, progress.workflow_step),
         )
-        repl(session, ctx, progress, stream)
+        repl(session, ctx, progress, stream, safety)
 
 
 def build_registry(args, stack: ExitStack, *, skills: list[SkillMeta], knowledge: Knowledge | None) -> ToolRegistry:
@@ -255,7 +290,7 @@ def report_citations(answer: str | None, seen: set[str], searched: bool) -> None
         print("※ 문서를 검색했지만 답에 출처가 없습니다.")
 
 
-def repl(session: Session, ctx: CommandContext, progress: Progress, stream: bool) -> None:
+def repl(session: Session, ctx: CommandContext, progress: Progress, stream: bool, safety: Safety) -> None:
     knowledge, audit = ctx.knowledge, session.settings.audit
     print(f"대화를 시작합니다({'스트리밍' if stream else '일괄 응답'}). 명령을 보려면 /help 를 입력하세요.")
     while True:
@@ -309,6 +344,8 @@ def repl(session: Session, ctx: CommandContext, progress: Progress, stream: bool
         progress.end_line()
         if not stream or not result.answer:  # 스트리밍이면 답은 이미 화면에 나왔으므로 다시 출력하지 않는다.
             print(result.answer or "(답변 없음)")
+        elif safety.answer_masked():  # 스트리밍 답은 이미 화면에 나갔다. 이력과 기록에는 가린 답이 들어갔다(C11 D12).
+            print("⚠ 답에 키 모양 문자열이 있어 기록에서 가렸습니다.")
         if knowledge:
             report_citations(result.answer, knowledge.seen, len(knowledge.calls) > calls_before)
         notice = ctx.after_turn(line)  # 턴마다 자동 저장하고, 이력이 기준보다 크면 안내한다.

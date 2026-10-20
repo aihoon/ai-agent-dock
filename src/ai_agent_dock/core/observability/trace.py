@@ -14,6 +14,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from ..safety.mask import mask_value
+
 
 def new_session_id(prefix: str = "") -> str:
     """시각 기반 세션 번호. 예: 20261018-150405-a1b2 (평가 실행이면 prefix로 eval-을 붙인다)."""
@@ -47,7 +49,7 @@ class Tracer:
             "step": step,
             "kind": kind,
             "duration_ms": None if duration_ms is None else round(duration_ms, 1),
-            **fields,
+            **mask_value(fields),  # 키와 개인정보는 가려서 남긴다(C11 D5).
         }
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a", encoding="utf-8") as f:

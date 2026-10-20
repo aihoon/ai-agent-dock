@@ -13,6 +13,7 @@ import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 
+from .hooks import EVENTS
 from .llm import AssistantMessage, LLMRequest, Message, Tool, UserMessage
 from .llm.tokens import count as count_tokens, request_tokens
 from .memory import MemoryStore
@@ -20,6 +21,7 @@ from .observability import new_session_id
 from .orchestration import WAITING, Outcome, WorkflowRunner
 from .retrieval import Knowledge
 from .runtime.types import Usage
+from .safety import ALWAYS_ON
 from .session import Session
 from .session.compact import compact
 from .session.store import SessionRecord, SessionStore, auto_name
@@ -138,6 +140,38 @@ def _history(ctx: CommandContext, arg: str) -> str:
 def _tools(ctx: CommandContext, arg: str) -> str:
     tools = ctx.session.settings.tools
     return "\n".join([f"(Tool {len(tools)}개, *는 필수 인자)", *(f"  {describe_tool(t, ctx.registry.source_of(t.name))}" for t in tools)])
+
+
+def _hooks(ctx: CommandContext, arg: str) -> str:
+    """사용자가 설치한 Hook(C11 D23). Safety는 /safety로 따로 본다."""
+    hooks = ctx.session.settings.hooks
+    lines = [f"Hook 자리: {', '.join(EVENTS)}"]
+    if not hooks.specs:
+        return "\n".join([*lines, "사용자 Hook: 없음(hooks.example.json을 hooks.json으로 복사하고 .env에 HOOKS_CONFIG=hooks.json)"])
+    lines.append(f"사용자 Hook {len(hooks.specs)}개:")
+    for spec in hooks.specs:
+        match = "" if spec.event == "after_answer" else f"  {spec.match}"
+        lines.append(f"  {spec.event:<12}{match}  {' '.join(spec.command)}")
+    return "\n".join(lines)
+
+
+def _safety(ctx: CommandContext, arg: str) -> str:
+    """항상 켜진 Safety 검사와 안전 정책(C11 D23)."""
+    safety = ctx.session.settings.safety
+    if safety is None:
+        return "Safety가 붙어 있지 않습니다(진입점이 with_safety로 붙인다)."
+    lines = ["항상 켜짐(끌 수 없음):", *(f"  {where:<12}  {what}" for where, what in ALWAYS_ON)]
+    wrapped = [t.name for t in ctx.session.settings.tools if t.untrusted_output]
+    lines.append(f"  감쌀 Tool {len(wrapped)}개: {', '.join(wrapped) or '없음'}")
+    policy = safety.policy
+    if policy is None:
+        lines.append("안전 정책: 없음(safety.example.json을 safety.json으로 복사하고 .env에 SAFETY_CONFIG=safety.json)")
+    else:
+        lines.append(f"안전 정책 {len(policy.rules)}개(before_tool):")
+        for name, rule in policy.rules.items():
+            paths = f", 경로 {', '.join(rule.paths)}" if rule.paths else ""
+            lines.append(f"  {name:<20}  {rule.mode}{paths}")
+    return "\n".join(lines)
 
 
 def _skills(ctx: CommandContext, arg: str) -> str:
@@ -332,6 +366,8 @@ COMMANDS = [
     Command("/history", "이력 보기", _history),
     Command("/tools", "사용 중인 Tool 보기", _tools),
     Command("/skills", "스킬 목록 보기", _skills),
+    Command("/hooks", "설치한 Hook 보기", _hooks),
+    Command("/safety", "항상 켜진 Safety 검사와 안전 정책 보기", _safety),
     Command("/skill 이름", "스킬 지침을 대화에 넣기", _skill),
     Command("/tokens", "마지막 턴, 세션 누적, 이력 크기 토큰 보기", _tokens),
     Command("/compact", "오래된 턴을 요약해 이력 줄이기", _compact),

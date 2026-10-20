@@ -25,7 +25,9 @@ DEFAULT_MAX_STEPS = 10
 BLOCKED = "이 턴에서 사용자가"
 DENIED = "사용자가 실행을 거부했다."
 REVISED = "사용자가 다르게 요청했다:"
-NOT_RUN_PREFIXES = (BLOCKED, DENIED, REVISED)
+SAFETY_BLOCKED = "안전 정책으로 막았다:"  # Safety가 막았다(C11 D19)
+HOOK_BLOCKED = "Hook이 막았다:"  # 사용자 Hook이 막았다(C11 D20)
+NOT_RUN_PREFIXES = (BLOCKED, DENIED, REVISED, SAFETY_BLOCKED, HOOK_BLOCKED)
 
 
 def run_agent(settings: AgentSettings, question: str, *, history: list[Message] | None = None) -> AgentResult:
@@ -77,6 +79,10 @@ def run_agent(settings: AgentSettings, question: str, *, history: list[Message] 
         answer = response.text
 
         if not response.tool_calls:
+            filtered = _filter_answer(settings, answer)
+            if filtered != answer:  # 바뀐 답(예: 키를 가림)을 이력에 둔다. 원본이 남은 raw는 버린다.
+                answer = filtered
+                history[-1] = AssistantMessage(content=answer)
             log.info("step %d: 최종 답변", step)
             return _finish(tracer, turn_started, AgentResult(answer=answer, status="completed", steps=step, history=history, usage=usage))
 
@@ -121,7 +127,11 @@ def _run_call(
     tool = tools_by_name.get(call.name)
     needs_approval = tool is not None and not (tool.read_only and tool.trusted)
     decision = "auto"
-    if needs_approval and call.name in denied:
+    blocked = _check_before(settings, call, tool)
+    if blocked:  # Safety나 Hook이 막으면 승인을 묻지도 실행하지도 않는다(C11 D22).
+        decision, prefix, reason = blocked
+        content, is_error = f"{prefix} {reason} 같은 요청을 다시 하지 말고 막힌 사실을 사용자에게 알려라.", True
+    elif needs_approval and call.name in denied:
         decision = "blocked"
         content, is_error = f"{BLOCKED} {call.name} 실행을 이미 거부했다. 같은 요청을 다시 하지 말고 거부된 사실을 사용자에게 알려라.", True
     elif settings.approve is not None and needs_approval:
@@ -137,6 +147,11 @@ def _run_call(
             content, is_error = _execute(tools_by_name, call)
     else:
         content, is_error = _execute(tools_by_name, call)
+    if decision in ("auto", "approve") and tool is not None:  # Hook 다음 Safety가 마지막(C11 D22)
+        for hook in settings.hooks.after_tool:
+            content = hook(call, tool, content)
+        if settings.safety is not None:
+            content = settings.safety.after_tool(call, tool, content)
     if settings.audit is not None:
         settings.audit.record(
             tool=call.name,
@@ -147,6 +162,31 @@ def _run_call(
             is_error=is_error,
         )
     return content, is_error
+
+
+def _check_before(settings: AgentSettings, call: ToolCall, tool: Tool | None) -> tuple[str, str, str] | None:
+    """Safety를 먼저, 그다음 Hook을 차례로 부른다. 막으면 (감사 로그 결정, 관찰 머리말, 이유)를 돌려준다."""
+    if tool is None:
+        return None
+    if settings.safety is not None:
+        reason = settings.safety.before_tool(call, tool)
+        if reason:
+            return "safety_block", SAFETY_BLOCKED, reason
+    for hook in settings.hooks.before_tool:
+        reason = hook(call, tool)
+        if reason:
+            return "hook_block", HOOK_BLOCKED, reason
+    return None
+
+
+def _filter_answer(settings: AgentSettings, answer: str | None) -> str | None:
+    if answer is None:
+        return None
+    for hook in settings.hooks.after_answer:
+        answer = hook(answer)
+    if settings.safety is not None:  # Safety가 마지막이라 Hook이 답을 바꿔도 키 가리기가 빠지지 않는다.
+        answer = settings.safety.after_answer(answer)
+    return answer
 
 
 def _execute(tools_by_name: dict[str, Tool], call: ToolCall) -> tuple[str, bool]:

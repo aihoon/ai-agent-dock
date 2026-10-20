@@ -230,3 +230,13 @@ def test_answer_check_agent_gets_search_docs_but_not_ask_user():
     runner.context.settings.llm = spy
     runner.start("answer-check", "최대 스텝은?")
     assert "search_docs" in seen_tools[0] and "ask_user" not in seen_tools[0]  # C10 D23
+
+
+def test_safety_applies_inside_the_workflow_agent():  # C11 D17
+    from ai_agent_dock.core.safety import with_safety
+
+    runner = make_runner(cited_answer())
+    runner.context.settings, _ = with_safety(runner.context.settings)
+    runner.start("answer-check", "최대 스텝은?")
+    search_result = runner.context.settings.llm.calls[1][-1].content  # 두 번째 호출에 실린 search_docs 결과
+    assert search_result.startswith('<untrusted source="search_docs">')

@@ -4,7 +4,7 @@
 Tool 호출, 스킬, 세션 기반 대화를 갖춘 플랫폼을 만들고, 그 위에 스킬·플러그인을 설치하거나 코드 워크플로를 얹어 **애플리케이션**을 만든다.
 
 ## 현재 단계
-C10 완료(오케스트레이션: LangGraph로 만든 answer-check 워크플로, 승인 대기와 재개, SQLite 체크포인트, workflow 평가). 태그: `c0`, `c1`, `c1.1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8`, `c9`, `c10`(커밋 후 태그).
+C11 완료(Safety와 Hook: 안전 정책 `safety.json`, 외부 내용 감싸기와 지시문 탐지, 키와 개인정보 가리기, 사용자가 설치하는 Hook `hooks.json`, safety 평가). 태그: `c0`, `c1`, `c1.1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8`, `c9`, `c10`, `c11`(커밋 후 태그).
 
 ## 실행
 
@@ -20,6 +20,7 @@ uv run python examples/chat_walkthrough.py --scenario mcp               # MCP �
 uv run python examples/chat_walkthrough.py --scenario skill             # 스킬 본문을 load_skill로 불러 따르는 모습(모델 없이)
 uv run python examples/chat_walkthrough.py --scenario hitl              # 승인 후 실행과 거부 후 미실행을 보여 준다(모델 없이, 가짜 승인자)
 uv run python examples/chat_walkthrough.py --scenario workflow          # 고쳐 쓰기 → 승인 대기 → 새 연결로 재개(모델 없이)
+uv run python examples/chat_walkthrough.py --scenario safety            # 지시문이 든 파일 읽기 → 경고 있는 승인 메뉴 → 거부(모델 없이)
 ```
 
 ### 채팅 명령
@@ -34,6 +35,7 @@ uv run python examples/chat_walkthrough.py --scenario workflow          # 고쳐
 | `/session-name 새이름`, `/session-new` | 지금 세션 이름 바꾸기(겹치면 거절), 새 세션 시작. 새 세션 이름은 "날짜 첫 질문 앞 20자"로 자동으로 붙는다 |
 | `/memory`, `/memory-add 내용`, `/memory-delete 번호` | 장기 메모리(`data/memory.md`, 번호 목록) 보기, 더하기, 지우기(확인 후). 메모리는 시스템 프롬프트에 들어가 모든 세션이 쓴다 |
 | `/workflows`, `/workflow 이름 요청`, `/workflow-resume 번호` | 워크플로 목록과 승인 대기 실행 보기, 시작, 승인 대기 실행 이어 가기(아래 "워크플로") |
+| `/safety`, `/hooks` | 항상 켜진 Safety 검사와 안전 정책(`safety.json`) 내용, Hook 자리 3개와 설치된 사용자 Hook(아래 "Safety와 Hook") |
 | `/reset`, `/history`, `/tools`, `/skills`, `/skill 이름` | 이력 비우기, 이력 보기, Tool 목록, 스킬 목록, 스킬 지침 넣기 |
 
 - 컴팩션 요약 모델은 `COMPACT_LLM_PROVIDER`, `COMPACT_LLM_MODEL`로 따로 정한다. 비워 두면 대화 모델을 쓴다.
@@ -54,6 +56,28 @@ uv run python examples/chat_walkthrough.py --scenario workflow          # 고쳐
 - 승인이나 근거 없음으로 끝나면 질문과 최종 답만 채팅 이력에 한 턴으로 붙는다. 초안과 고쳐 쓴 과정은 체크포인트와 추적 기록에만 남는다. 워크플로는 채팅의 앞선 대화를 보지 않는다.
 - LangGraph는 `core/orchestration/`과 `src/ai_agent_dock/workflows/`에서만 import한다(`tests/test_orchestration.py`가 확인). 함께 설치되는 langsmith는 `LANGSMITH_TRACING=true`일 때만 외부로 보내므로 `.env.example`은 `false`로 둔다.
 
+### Safety와 Hook
+
+**Safety**는 플랫폼이 항상 거는 고정 검사다. 끄는 설정은 없고, 안전 정책 파일로 더 엄격하게만 바꾼다. **Hook**은 사용자가 설치해 더하는 확장이다.
+
+| 자리 | Safety(항상 켜짐) | Hook(`hooks.json`) |
+|---|---|---|
+| `before_tool`(실행 직전, 승인보다 먼저) | 안전 정책 검사: 막힌 Tool이나 허용 패턴 밖 경로는 `⛔`로 막는다 | 외부 명령이 `{"block": "이유"}`를 내면 막는다 |
+| `after_tool`(실행 직후) | MCP와 `search_docs` 결과를 `<untrusted>` 경계로 감싸고, 지시문으로 보이는 문장이 있으면 경고를 붙인다 | `{"result": "새 결과"}`로 결과를 바꾼다 |
+| `after_answer`(답을 이력에 넣기 전) | 답의 API 키를 `[KEY]`로 가린다 | `{"answer": "새 답"}`으로 답을 바꾼다 |
+
+```bash
+cp safety.example.json safety.json   # 안전 정책: Tool별 deny(차단) 또는 ask(승인)와 허용 경로 패턴. .env의 SAFETY_CONFIG
+cp hooks.example.json hooks.json     # 사용자 Hook: 이벤트별 명령 목록. .env의 HOOKS_CONFIG, HOOK_TIMEOUT
+```
+
+- 순서: `before_tool`은 Safety → Hook, 나머지는 Hook → Safety. Hook이 결과나 답을 바꿔도 감싸기와 키 가리기가 빠지지 않는다.
+- 지시문 의심 문장을 찾은 턴에는 승인 메뉴 위에 `⚠` 경고가 나온다. 차단하지는 않는다. 위험 작업은 승인과 안전 정책이 막는다.
+- 안전 정책은 지금보다 느슨하게(`allow`) 바꿀 수 없고, 없는 Tool 이름을 적으면 시작할 때 오류가 난다.
+- Hook 명령은 `hooks.json`이 있는 폴더에서 실행되고, 표준 입력으로 `{"event", "tool", "arguments", "result", "answer"}`를 받는다. 실패하거나 제한 시간을 넘기면 `before_tool`은 막고, 나머지는 원래 값을 둔 채 경고한다. 예시 `hooks/log_call.py`는 Tool 이름과 인자 이름을 `logs/hook_calls.jsonl`에 남긴다.
+- 추적 기록과 감사 로그는 API 키, 이메일, 전화번호, 주민등록번호, 카드번호를 가린다. 세션 파일의 사용자 입력과 Tool 결과는 이어 하기를 위해 원문으로 둔다(`data/`는 git 제외).
+- `safety.json`과 `hooks.json`은 git에 올리지 않는다. 파일이 없으면 경고를 보이고 그것 없이 시작한다.
+
 ### 평가와 추적
 
 ```bash
@@ -63,7 +87,7 @@ uv run evals --provider anthropic --repeat 3   # 제공자를 바꾸고, 케이�
 uv run python scripts/trace_report.py          # 세션 목록(저장된 세션은 [이름]이 붙는다). show 세션이름 또는 세션번호 / total / compare 로 통계를 본다
 ```
 
-- 평가 케이스는 `evals/cases.jsonl`에 있다(git에 올린다). 카테고리는 tool, docs, approval, clarify, skill, memory, workflow다. workflow 케이스는 승인 단계의 답(`workflow_decisions`), 마지막 상태(`expect_status`), 고쳐 쓴 횟수 상한(`expect_max_revisions`)을 쓴다. memory 케이스는 앞선 턴(`setup_turns`), 마지막 질문 전 컴팩션(`compact_before`), 평가용 장기 메모리(`memory_items`)를 쓴다.
+- 평가 케이스는 `evals/cases.jsonl`에 있다(git에 올린다). 카테고리는 tool, docs, approval, clarify, skill, memory, workflow, safety다. safety 케이스는 실제로 실행되면 안 되는 Tool(`forbid_executed`)과 평가 전용 문서 색인(`"knowledge": "fixtures"`)을 쓴다. 평가 전용 자료는 `evals/fixtures/`에 있고, 평가할 때 `data/sandbox/eval/`로 복사하고 `data/evals/index.sqlite`로 색인한다. workflow 케이스는 승인 단계의 답(`workflow_decisions`), 마지막 상태(`expect_status`), 고쳐 쓴 횟수 상한(`expect_max_revisions`)을 쓴다. memory 케이스는 앞선 턴(`setup_turns`), 마지막 질문 전 컴팩션(`compact_before`), 평가용 장기 메모리(`memory_items`)를 쓴다.
 - 판정은 규칙 기반이다. 기대한 Tool 호출, 금지 Tool, 답에 있어야 할 표현, 있으면 안 되는 표현, 출처 표기, 실행한 Tool의 오류를 본다. 목표는 100% 통과다.
 - 결과는 `data/evals/실행번호.json`에 저장되고, 직전 실행에서 통과했는데 이번에 실패한 케이스를 회귀로 표시한다.
 - 추적 기록은 `logs/sessions/세션번호.jsonl`에 세션마다 남는다. 질문, 답, Tool 인자와 결과, 입력·출력 토큰 수를 담는다. 제공자가 토큰 수를 주지 않으면 tiktoken으로 계산하고 출처 태그(`provider`, `tiktoken`)를 붙인다.
@@ -122,7 +146,10 @@ Python 3.12, 패키지 관리는 [uv](https://docs.astral.sh/uv/)를 쓴다.
 - `src/ai_agent_dock/core/evals/`: 평가. 케이스 읽기와 규칙 판정(`score.py`), 실행과 결과 저장, 회귀 표시(`run.py`)
 - `src/ai_agent_dock/core/observability/`: 관측. 세션별 추적 기록(`trace.py`)과 추적 리포트 계산(`report.py`)
 - `src/ai_agent_dock/core/llm/tokens.py`: 토큰 수 채우기(제공자 값이 없으면 tiktoken으로 계산하고 출처 태그를 붙인다)
-- `evals/`: 평가 케이스(`cases.jsonl`)
+- `src/ai_agent_dock/core/safety/`: Safety. 안전 정책(`policy.py`), 감싸기와 지시문 탐지, 키 가리기(`checks.py`), 가리기 패턴(`mask.py`). runtime은 이 폴더를 import하지 않고 Safety의 모양(`SafetyChecks`)만 안다
+- `src/ai_agent_dock/core/hooks/`: Hook 엔진(`hooks.json` 읽기, 외부 명령 실행)
+- `hooks/`, `hooks.example.json`, `safety.example.json`: 사용자 Hook 스크립트와 설정 예시(복사해서 `hooks.json`, `safety.json`으로 쓴다)
+- `evals/`: 평가 케이스(`cases.jsonl`)와 평가 전용 자료(`fixtures/`)
 - `src/ai_agent_dock/core/session/`: 대화 세션(턴 사이에 이력을 이어 간다), 세션 저장(`store.py`, `data/sessions/`), 컴팩션(`compact.py`)
 - `src/ai_agent_dock/core/memory/`: 장기 메모리(`data/memory.md`)
 - `src/ai_agent_dock/core/orchestration/`: 워크플로 실행 기반(`WorkflowRunner`: 시작, 재개, 승인 대기 찾기, 추적 기록). 체크포인트 저장 방식은 밖에서 받는다(채팅은 SQLite, 테스트와 평가는 메모리)

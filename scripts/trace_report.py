@@ -41,7 +41,7 @@ def main() -> None:
         if not args.session:
             raise SystemExit("사용법: show 세션이름 또는 세션번호 (목록은 인자 없이 실행하면 나온다)")
         by_name = [s for s in stats if names.get(s.session) == args.session]  # 이름이 정확히 같으면 이름을 먼저 쓴다.
-        matches = by_name or [s for s in stats if s.session.startswith(args.session)]
+        matches = by_name or [s for s in stats if args.session in s.session]  # 번호 일부만 적어도 찾는다(eval- 생략 등).
         if len(matches) != 1:
             raise SystemExit(f"세션을 하나로 정할 수 없습니다: {args.session!r} (일치 {len(matches)}개). 목록은 인자 없이 실행해 보세요.")
         print(format_session(matches[0]))

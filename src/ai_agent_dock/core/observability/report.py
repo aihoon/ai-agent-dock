@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..llm.tokens import TIKTOKEN
@@ -31,6 +31,8 @@ class SessionStats:
     end: str
     model: str | None
     turns: list[TurnStats]
+    safety: dict[str, int] = field(default_factory=dict)  # Safety 기록 종류별 개수(C11 D13)
+    hooks: int = 0  # 사용자 Hook 실행 수(C11 D21)
 
     def total(self, name: str) -> float:
         return sum(getattr(t, name) for t in self.turns)
@@ -48,11 +50,19 @@ def load_sessions(directory: Path) -> dict[str, list[dict]]:
 
 def session_stats(session: str, lines: list[dict]) -> SessionStats:
     turns: dict[int, TurnStats] = {}
+    safety: dict[str, int] = {}
+    hooks = 0
     model = None
     for line in lines:
         kind = line["kind"]
         if kind == "session_start":
             model = line.get("model")
+            continue
+        if kind == "safety":
+            safety[line.get("check", "?")] = safety.get(line.get("check", "?"), 0) + 1
+            continue
+        if kind == "hook":
+            hooks += 1
             continue
         if kind not in ("turn_start", "llm", "tool", "turn_end"):
             continue  # compact, session_resume 같은 명령 기록은 턴 통계에 넣지 않는다.
@@ -73,6 +83,8 @@ def session_stats(session: str, lines: list[dict]) -> SessionStats:
         end=lines[-1]["time"],
         model=model,
         turns=[turns[k] for k in sorted(turns)],
+        safety=safety,
+        hooks=hooks,
     )
 
 
@@ -97,6 +109,10 @@ def format_session(s: SessionStats) -> str:
         f"  합계 {s.total('llm_calls'):>3.0f}  {s.total('tool_calls'):>4.0f}  {s.total('duration_ms'):>9.1f}  "
         f"{s.total('input_tokens'):>9.0f}  {s.total('cached_tokens'):>6.0f}  {s.total('output_tokens'):>8.0f}  {s.total('estimated'):>6.0f}"
     )
+    if s.safety:
+        rows.append("  Safety: " + ", ".join(f"{k} {v}" for k, v in sorted(s.safety.items())))
+    if s.hooks:
+        rows.append(f"  Hook 실행: {s.hooks}")
     return "\n".join(rows)
 
 

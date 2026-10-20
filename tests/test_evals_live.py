@@ -4,6 +4,7 @@
 결과는 data/evals/실행번호.json, 추적은 logs/sessions/eval-실행번호.jsonl에 남는다.
 """
 
+import shutil
 from contextlib import ExitStack
 from pathlib import Path
 
@@ -17,9 +18,10 @@ from ai_agent_dock.core.llm.tokens import request_tokens
 from ai_agent_dock.core.session.compact import compact
 from ai_agent_dock.core.observability import Tracer, new_session_id
 from ai_agent_dock.core.orchestration import WorkflowContext, WorkflowRunner
-from ai_agent_dock.core.retrieval import open_knowledge
+from ai_agent_dock.core.retrieval import KnowledgeIndex, OpenAIEmbedder, open_knowledge
 from ai_agent_dock.core.runtime.prompt import build_system_prompt
 from ai_agent_dock.core.runtime.types import AgentSettings
+from ai_agent_dock.core.safety import load_safety_policy, with_safety
 from ai_agent_dock.core.skills import scan_skills
 from ai_agent_dock.core.toolkit import make_builtin_tools
 from ai_agent_dock.core.tools import DEFAULT_MAX_RESULT_CHARS, ToolRegistry
@@ -27,6 +29,20 @@ from ai_agent_dock.env import env_bool, env_float, env_int, env_str
 from ai_agent_dock.workflows import WORKFLOWS
 
 ROOT = Path(__file__).resolve().parent.parent
+FIXTURES = ROOT / "evals" / "fixtures"  # safety 평가 전용 자료(C11 D14). 일반 대화의 knowledge/, data/index.sqlite와 섞지 않는다.
+
+
+def prepare_fixtures():
+    """평가용 파일을 파일 서버 폴더(data/sandbox/eval/)에 복사하고, 평가용 문서 색인(data/evals/index.sqlite)을 만든다."""
+    shutil.copytree(FIXTURES / "sandbox", ROOT / "data" / "sandbox", dirs_exist_ok=True)
+    path = ROOT / "data" / "evals" / "index.sqlite"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    store = KnowledgeIndex(path, OpenAIEmbedder())
+    try:
+        store.refresh(FIXTURES / "knowledge")  # 바뀐 문서만 다시 임베딩한다.
+    finally:
+        store.close()
+    return open_knowledge(path)
 
 pytestmark = pytest.mark.live
 
@@ -54,6 +70,7 @@ def test_cases_with_real_model(request):
     cases = load_cases(ROOT / "evals" / "cases.jsonl")
     skills = scan_skills(ROOT / "skills")
     knowledge = open_knowledge(ROOT / "data" / "index.sqlite")
+    fixture_knowledge = prepare_fixtures()
     system_prompt = build_system_prompt(skills=skills, cite_docs=knowledge is not None)
     summarize_config = config  # 컴팩션 요약도 같은 모델로 한다(평가에서는 COMPACT_LLM_* 설정을 쓰지 않는다)
 
@@ -64,21 +81,24 @@ def test_cases_with_real_model(request):
 
     with ExitStack() as stack:
         mcp_tools = connect_mcp(stack)
+        policy = load_safety_policy(FIXTURES / "safety.json") if "files" in mcp_tools else None  # 안전 정책은 파일 서버 Tool을 막는다.
 
         def make_settings(case):
+            kb = fixture_knowledge if case.knowledge == "fixtures" else knowledge
             registry = ToolRegistry(max_result_chars=env_int("TOOL_RESULT_MAX_CHARS", DEFAULT_MAX_RESULT_CHARS))
-            for source, tool in make_builtin_tools(skills=skills, knowledge=knowledge, input_fn=scripted_input(case.user_inputs)):
+            for source, tool in make_builtin_tools(skills=skills, knowledge=kb, input_fn=scripted_input(case.user_inputs)):
                 registry.add(tool, source=source)
             for server, tools in mcp_tools.items():
                 registry.add_all(tools, source=f"mcp:{server}")
-            prompt = build_system_prompt(skills=skills, cite_docs=knowledge is not None, memory=case.memory_items)
-            return AgentSettings(
+            prompt = build_system_prompt(skills=skills, cite_docs=kb is not None, memory=case.memory_items)
+            settings = AgentSettings(
                 config=config,
                 tools=registry.tools(),
                 system_prompt=prompt,
                 approve=scripted_approver(case.approvals),
                 tracer=tracer,
             )
+            return with_safety(settings, policy=policy)[0]  # 채팅과 같은 Safety(C11 D17)
 
         first = make_settings(cases[0])
         tracer.record(

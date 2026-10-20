@@ -61,4 +61,5 @@ def _to_tool(connection: McpConnection, definition: Any) -> Tool:
         func=func,
         read_only=bool(getattr(annotations, "read_only_hint", False)),
         trusted=connection.spec.trusted,
+        untrusted_output=True,  # 서버가 돌려주는 내용은 외부 내용이다(C11 D9).
     )

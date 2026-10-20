@@ -1,0 +1,9 @@
+{
+  "hooks": {
+    "before_tool": [
+      {"match": "*", "command": ["python3", "hooks/log_call.py"]}
+    ],
+    "after_tool": [],
+    "after_answer": []
+  }
+}

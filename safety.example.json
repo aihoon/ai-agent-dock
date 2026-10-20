@@ -1,0 +1,7 @@
+{
+  "tools": {
+    "files__move_file": "deny",
+    "files__write_file": {"mode": "ask", "paths": ["*.md", "*.txt"]},
+    "files__edit_file": {"mode": "ask", "paths": ["*.md", "*.txt"]}
+  }
+}

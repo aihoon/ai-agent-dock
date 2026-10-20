@@ -30,6 +30,10 @@ logs/
 # MCP 서버 설정(토큰이 들어갈 수 있음)
 mcp.json
 
+# Safety 안전 정책과 Hook(로컬 설정). 루트 파일만 뺀다(evals/fixtures/safety.json은 올린다).
+/safety.json
+/hooks.json
+
 # OS
 .DS_Store
 
