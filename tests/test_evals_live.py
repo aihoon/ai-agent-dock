@@ -12,6 +12,7 @@ import pytest
 from dotenv import load_dotenv
 from langgraph.checkpoint.memory import InMemorySaver
 
+from ai_agent_dock.core.agents import MAIN, AgentTeam, load_agents
 from ai_agent_dock.core.evals import evaluate, last_passed, load_cases, regressions, save_run, scripted_approver, scripted_input, summarize
 from ai_agent_dock.core.llm import LLMRequest, UserMessage, call_llm, config_from_env
 from ai_agent_dock.core.llm.tokens import request_tokens
@@ -19,8 +20,7 @@ from ai_agent_dock.core.session.compact import compact
 from ai_agent_dock.core.observability import Tracer, new_session_id
 from ai_agent_dock.core.orchestration import WorkflowContext, WorkflowRunner
 from ai_agent_dock.core.retrieval import KnowledgeIndex, OpenAIEmbedder, open_knowledge
-from ai_agent_dock.core.runtime.prompt import build_system_prompt
-from ai_agent_dock.core.runtime.types import AgentSettings
+from ai_agent_dock.core.runtime.types import AgentConfig
 from ai_agent_dock.core.safety import load_safety_policy, with_safety
 from ai_agent_dock.core.skills import scan_skills
 from ai_agent_dock.core.toolkit import make_builtin_tools
@@ -54,9 +54,11 @@ def connect_mcp(stack: ExitStack) -> dict:
         return {}
     from ai_agent_dock.core.tools.mcp import connect_mcp_servers, load_config
 
+    servers = load_config(path)
+    servers.pop("web", None)  # 평가는 웹 검색(Tavily)에 기대지 않는다. 결과가 매번 달라진다(C12 Q13).
     return stack.enter_context(
         connect_mcp_servers(
-            load_config(path),
+            servers,
             call_timeout=env_float("MCP_TOOL_TIMEOUT", 30.0),
             start_timeout=env_float("MCP_START_TIMEOUT", 60.0),
         )
@@ -66,13 +68,26 @@ def connect_mcp(stack: ExitStack) -> dict:
 def test_cases_with_real_model(request):
     load_dotenv(ROOT / ".env")
     repeat = request.config.getoption("--repeat")
-    config = config_from_env(request.config.getoption("--provider"))
+    llm_config = config_from_env(request.config.getoption("--provider"))
     cases = load_cases(ROOT / "evals" / "cases.jsonl")
     skills = scan_skills(ROOT / "skills")
     knowledge = open_knowledge(ROOT / "data" / "index.sqlite")
     fixture_knowledge = prepare_fixtures()
-    system_prompt = build_system_prompt(skills=skills, cite_docs=knowledge is not None)
-    summarize_config = config  # 컴팩션 요약도 같은 모델로 한다(평가에서는 COMPACT_LLM_* 설정을 쓰지 않는다)
+    delegated = []  # 이번 실행에서 맡긴 하위 에이전트의 결과. 판정에 하위 에이전트의 Tool 호출도 센다(C12).
+    team = AgentTeam(
+        load_agents(ROOT / "agents"),
+        max_depth=env_int("SUBAGENT_MAX_DEPTH", 1),
+        max_steps=env_int("SUBAGENT_MAX_STEPS", 6),
+        max_result_chars=env_int("TOOL_RESULT_MAX_CHARS", DEFAULT_MAX_RESULT_CHARS),
+        on_end=lambda name, result: delegated.append(result),
+    )
+
+    def take_delegated():
+        taken = list(delegated)
+        delegated.clear()
+        return taken
+
+    summarize_config = llm_config  # 컴팩션 요약도 같은 모델로 한다(평가에서는 COMPACT_LLM_* 설정을 쓰지 않는다)
 
     def summarize_text(text):  # 컴팩션 요약. 평가 결과 요약(summarize)과 이름이 겹치지 않게 한다.
         return call_llm(LLMRequest(config=summarize_config, messages=[UserMessage(content=text)])).text or ""
@@ -83,47 +98,49 @@ def test_cases_with_real_model(request):
         mcp_tools = connect_mcp(stack)
         policy = load_safety_policy(FIXTURES / "safety.json") if "files" in mcp_tools else None  # 안전 정책은 파일 서버 Tool을 막는다.
 
-        def make_settings(case):
+        def make_config(case):
             kb = fixture_knowledge if case.knowledge == "fixtures" else knowledge
             registry = ToolRegistry(max_result_chars=env_int("TOOL_RESULT_MAX_CHARS", DEFAULT_MAX_RESULT_CHARS))
             for source, tool in make_builtin_tools(skills=skills, knowledge=kb, input_fn=scripted_input(case.user_inputs)):
                 registry.add(tool, source=source)
             for server, tools in mcp_tools.items():
                 registry.add_all(tools, source=f"mcp:{server}")
-            prompt = build_system_prompt(skills=skills, cite_docs=kb is not None, memory=case.memory_items)
-            settings = AgentSettings(
-                config=config,
+            config = AgentConfig(
+                llm_config=llm_config,
                 tools=registry.tools(),
-                system_prompt=prompt,
-                approve=scripted_approver(case.approvals),
+                approve=scripted_approver(case.approvals),  # 하위 에이전트의 승인도 Tool 이름으로 답한다.
                 tracer=tracer,
             )
-            return with_safety(settings, policy=policy)[0]  # 채팅과 같은 Safety(C11 D17)
+            base = with_safety(config, policy=policy)[0]  # 채팅과 같은 Safety(C11 D17)
+            return team.config_for(MAIN, base, skills=skills, memory=case.memory_items)  # 채팅과 같은 main(C12)
 
-        first = make_settings(cases[0])
+        first = make_config(cases[0])
+        system_prompt = first.system_prompt
         tracer.record(
             "session_start",
             None,
             system_prompt=system_prompt,
             tools=[{"name": t.name, "description": t.description, "parameters": t.parameters} for t in first.tools],
-            model=config.model,
+            model=llm_config.model,
             max_steps=first.max_steps,
         )
         def compactor(history):
             tools = first.tools
-            count = lambda h: request_tokens(LLMRequest(config=config, messages=h, system_prompt=system_prompt, tools=tools))
+            count = lambda h: request_tokens(LLMRequest(config=llm_config, messages=h, system_prompt=system_prompt, tools=tools))
             return compact(history, keep_turns=env_int("COMPACT_KEEP_TURNS", 4), summarize=summarize_text, count=count)[0]
 
-        def workflows(settings):  # 워크플로 케이스(C10): 체크포인트는 메모리에 둔다(평가는 재개하지 않는다).
-            context = WorkflowContext(settings=settings, knowledge=knowledge, max_revisions=env_int("WORKFLOW_MAX_REVISIONS", 2))
+        def workflows(config):  # 워크플로 케이스(C10): 체크포인트는 메모리에 둔다(평가는 재개하지 않는다).
+            context = WorkflowContext(config=config, knowledge=knowledge, max_revisions=env_int("WORKFLOW_MAX_REVISIONS", 2))
             return WorkflowRunner(WORKFLOWS, context, InMemorySaver())
 
-        results = [evaluate(case, make_settings, repeat, compactor=compactor, workflows=workflows) for case in cases]
+        results = [
+            evaluate(case, make_config, repeat, compactor=compactor, workflows=workflows, delegated=take_delegated) for case in cases
+        ]
 
     results_dir = ROOT / "data" / "evals"
     previous = last_passed(results_dir)  # 저장하기 전에 직전 실행을 읽는다.
     regressed = regressions(previous or set(), {r.id for r in results if not r.passed})
-    path = save_run(results_dir, run_id, config.provider, config.model, repeat, results)
+    path = save_run(results_dir, run_id, llm_config.provider, llm_config.model, repeat, results)
     summary = summarize(results, regressed)
-    print(f"\n[평가 {run_id}] {config.provider}/{config.model}, 반복 {repeat}회\n{summary}\n결과 파일: {path}")
+    print(f"\n[평가 {run_id}] {llm_config.provider}/{llm_config.model}, 반복 {repeat}회\n{summary}\n결과 파일: {path}")
     assert all(r.passed for r in results), summary

@@ -13,6 +13,7 @@ import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 
+from .agents import DELEGATE, MAIN, AgentTeam
 from .hooks import EVENTS
 from .llm import AssistantMessage, LLMRequest, Message, Tool, UserMessage
 from .llm.tokens import count as count_tokens, request_tokens
@@ -49,15 +50,16 @@ class CommandContext:
     record: SessionRecord | None = None  # 지금 세션의 저장 기록. 첫 턴(또는 이름 정하기)에 만든다.
     workflows: WorkflowRunner | None = None  # 워크플로 실행기(C10). None이면 워크플로 명령을 쓸 수 없다.
     waiting: Outcome | None = None  # 사람 승인을 기다리는 워크플로. 응용이 메뉴를 보여 주고 answer_workflow로 답한다.
+    agents: AgentTeam | None = None  # 설치된 에이전트(C12). /agents가 보여 준다.
 
     @property
     def tracer(self):
-        return self.session.settings.tracer
+        return self.session.config.tracer
 
     def ensure_record(self, name: str) -> SessionRecord:
         if self.record is None:
             session_id = self.tracer.session_id if self.tracer else new_session_id()
-            self.record = SessionRecord(id=session_id, name=self.store.unique_name(name), provider=self.session.settings.config.provider)
+            self.record = SessionRecord(id=session_id, name=self.store.unique_name(name), provider=self.session.config.llm_config.provider)
         return self.record
 
     def save(self) -> None:
@@ -81,11 +83,11 @@ class CommandContext:
             self.knowledge.seen.clear()
 
     def reload_prompt(self) -> None:
-        self.session.settings = replace(self.session.settings, system_prompt=self.make_prompt())
+        self.session.config = replace(self.session.config, system_prompt=self.make_prompt())
 
     def runner(self) -> WorkflowRunner:
         """워크플로 실행기. 노드 안 에이전트가 지금 설정(메모리를 반영한 시스템 프롬프트)을 쓰게 맞춘다."""
-        self.workflows.context.settings = self.session.settings
+        self.workflows.context.config = self.session.config
         self.session.record_start()  # 워크플로가 이 세션의 첫 동작이어도 추적 파일에 세션 설정을 먼저 쓴다.
         return self.workflows
 
@@ -138,13 +140,27 @@ def _history(ctx: CommandContext, arg: str) -> str:
 
 
 def _tools(ctx: CommandContext, arg: str) -> str:
-    tools = ctx.session.settings.tools
-    return "\n".join([f"(Tool {len(tools)}개, *는 필수 인자)", *(f"  {describe_tool(t, ctx.registry.source_of(t.name))}" for t in tools)])
+    tools = ctx.session.config.tools
+    source = lambda t: "agents" if t.name == DELEGATE else ctx.registry.source_of(t.name)  # delegate는 레지스트리가 아니라 에이전트가 만든다.
+    return "\n".join([f"(Tool {len(tools)}개, *는 필수 인자)", *(f"  {describe_tool(t, source(t))}" for t in tools)])
+
+
+def _agents(ctx: CommandContext, arg: str) -> str:
+    """설치된 에이전트와 Tool 패턴, 위임 깊이(C12 F5)."""
+    team = ctx.agents
+    if team is None:
+        return "에이전트 정의가 없습니다(agents/ 폴더)."
+    lines = [f"에이전트 {len(team.agents)}개 (맡기기 깊이 상한 {team.max_depth}, SUBAGENT_MAX_DEPTH):"]
+    for agent in team.agents.values():
+        targets = ", ".join(a.name for a in team.targets(agent.name)) if agent.name == MAIN else ""
+        lines.append(f"  {agent.name}: {agent.description}")
+        lines.append(f"      tools: {', '.join(agent.tools)}" + (f"  → 맡길 수 있음: {targets}" if targets else ""))
+    return "\n".join(lines)
 
 
 def _hooks(ctx: CommandContext, arg: str) -> str:
     """사용자가 설치한 Hook(C11 D23). Safety는 /safety로 따로 본다."""
-    hooks = ctx.session.settings.hooks
+    hooks = ctx.session.config.hooks
     lines = [f"Hook 자리: {', '.join(EVENTS)}"]
     if not hooks.specs:
         return "\n".join([*lines, "사용자 Hook: 없음(hooks.example.json을 hooks.json으로 복사하고 .env에 HOOKS_CONFIG=hooks.json)"])
@@ -157,11 +173,11 @@ def _hooks(ctx: CommandContext, arg: str) -> str:
 
 def _safety(ctx: CommandContext, arg: str) -> str:
     """항상 켜진 Safety 검사와 안전 정책(C11 D23)."""
-    safety = ctx.session.settings.safety
+    safety = ctx.session.config.safety
     if safety is None:
         return "Safety가 붙어 있지 않습니다(진입점이 with_safety로 붙인다)."
     lines = ["항상 켜짐(끌 수 없음):", *(f"  {where:<12}  {what}" for where, what in ALWAYS_ON)]
-    wrapped = [t.name for t in ctx.session.settings.tools if t.untrusted_output]
+    wrapped = [t.name for t in ctx.session.config.tools if t.untrusted_output]
     lines.append(f"  감쌀 Tool {len(wrapped)}개: {', '.join(wrapped) or '없음'}")
     policy = safety.policy
     if policy is None:
@@ -205,8 +221,8 @@ def _compact(ctx: CommandContext, arg: str) -> str:
         return "줄일 이력이 없습니다."
 
     def tokens_of(history: list[Message]) -> int:
-        s = session.settings
-        return request_tokens(LLMRequest(config=s.config, messages=history, system_prompt=s.system_prompt, tools=s.tools))
+        s = session.config
+        return request_tokens(LLMRequest(config=s.llm_config, messages=history, system_prompt=s.system_prompt, tools=s.tools))
 
     try:
         new_history, report = compact(session.history, keep_turns=ctx.keep_turns, summarize=ctx.summarize, count=tokens_of)
@@ -241,7 +257,7 @@ def _session(ctx: CommandContext, arg: str) -> str:
     if not arg.isdigit() or not 1 <= int(arg) <= len(records):
         return f"사용법: /session 번호 (1~{len(records)}, 목록은 /sessions)"
     ctx.save()  # 바꾸기 전 세션을 저장해 둔다.
-    ctx.record = ctx.store.load(records[int(arg) - 1].id, ctx.session.settings.config.provider)
+    ctx.record = ctx.store.load(records[int(arg) - 1].id, ctx.session.config.llm_config.provider)
     ctx.start_fresh(ctx.record.history)
     if ctx.tracer:
         ctx.tracer.session_id, ctx.tracer.turn = ctx.record.id, ctx.record.turns  # 같은 파일에서 턴 번호가 겹치지 않게 이어 센다
@@ -366,6 +382,7 @@ COMMANDS = [
     Command("/history", "이력 보기", _history),
     Command("/tools", "사용 중인 Tool 보기", _tools),
     Command("/skills", "스킬 목록 보기", _skills),
+    Command("/agents", "에이전트 목록 보기", _agents),
     Command("/hooks", "설치한 Hook 보기", _hooks),
     Command("/safety", "항상 켜진 Safety 검사와 안전 정책 보기", _safety),
     Command("/skill 이름", "스킬 지침을 대화에 넣기", _skill),

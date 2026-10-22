@@ -4,7 +4,7 @@
 Tool 호출, 스킬, 세션 기반 대화를 갖춘 플랫폼을 만들고, 그 위에 스킬·플러그인을 설치하거나 코드 워크플로를 얹어 **애플리케이션**을 만든다.
 
 ## 현재 단계
-C11 완료(Safety와 Hook: 안전 정책 `safety.json`, 외부 내용 감싸기와 지시문 탐지, 키와 개인정보 가리기, 사용자가 설치하는 Hook `hooks.json`, safety 평가). 태그: `c0`, `c1`, `c1.1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8`, `c9`, `c10`, `c11`(커밋 후 태그).
+C12 완료(서브에이전트: `agents/이름/AGENT.md`로 에이전트를 정의하고, main이 `delegate` Tool로 researcher에게 조사를 맡겨 최종 답만 받는다. 컨텍스트 격리, 읽기 전용 Tool, 부모-자식 추적, subagent 평가). 태그: `c0`, `c1`, `c1.1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8`, `c9`, `c10`, `c11`, `c12`(커밋 후 태그).
 
 ## 실행
 
@@ -21,6 +21,7 @@ uv run python examples/chat_walkthrough.py --scenario skill             # 스킬
 uv run python examples/chat_walkthrough.py --scenario hitl              # 승인 후 실행과 거부 후 미실행을 보여 준다(모델 없이, 가짜 승인자)
 uv run python examples/chat_walkthrough.py --scenario workflow          # 고쳐 쓰기 → 승인 대기 → 새 연결로 재개(모델 없이)
 uv run python examples/chat_walkthrough.py --scenario safety            # 지시문이 든 파일 읽기 → 경고 있는 승인 메뉴 → 거부(모델 없이)
+uv run python examples/chat_walkthrough.py --scenario subagent          # main이 researcher에게 맡기고 답만 받는 모습, 스텝별 입력과 출력(모델 없이)
 ```
 
 ### 채팅 명령
@@ -35,6 +36,7 @@ uv run python examples/chat_walkthrough.py --scenario safety            # 지시
 | `/session-name 새이름`, `/session-new` | 지금 세션 이름 바꾸기(겹치면 거절), 새 세션 시작. 새 세션 이름은 "날짜 첫 질문 앞 20자"로 자동으로 붙는다 |
 | `/memory`, `/memory-add 내용`, `/memory-delete 번호` | 장기 메모리(`data/memory.md`, 번호 목록) 보기, 더하기, 지우기(확인 후). 메모리는 시스템 프롬프트에 들어가 모든 세션이 쓴다 |
 | `/workflows`, `/workflow 이름 요청`, `/workflow-resume 번호` | 워크플로 목록과 승인 대기 실행 보기, 시작, 승인 대기 실행 이어 가기(아래 "워크플로") |
+| `/agents` | 설치된 에이전트(이름, 설명, Tool 패턴)와 main이 맡길 수 있는 에이전트, 맡기기 깊이 상한(아래 "서브에이전트") |
 | `/safety`, `/hooks` | 항상 켜진 Safety 검사와 안전 정책(`safety.json`) 내용, Hook 자리 3개와 설치된 사용자 Hook(아래 "Safety와 Hook") |
 | `/reset`, `/history`, `/tools`, `/skills`, `/skill 이름` | 이력 비우기, 이력 보기, Tool 목록, 스킬 목록, 스킬 지침 넣기 |
 
@@ -55,6 +57,26 @@ uv run python examples/chat_walkthrough.py --scenario safety            # 지시
 - 승인 메뉴는 `1) 승인`, `2) 거부`, `3) 다르게 요청(이유 입력)`이다. 엔터만 치면 승인 대기로 남는다. 승인 대기 상태는 `data/checkpoints.sqlite`에 저장되어 프로그램을 껐다 켜도 `/workflows`에 보이고 `/workflow-resume 번호`로 이어 간다.
 - 승인이나 근거 없음으로 끝나면 질문과 최종 답만 채팅 이력에 한 턴으로 붙는다. 초안과 고쳐 쓴 과정은 체크포인트와 추적 기록에만 남는다. 워크플로는 채팅의 앞선 대화를 보지 않는다.
 - LangGraph는 `core/orchestration/`과 `src/ai_agent_dock/workflows/`에서만 import한다(`tests/test_orchestration.py`가 확인). 함께 설치되는 langsmith는 `LANGSMITH_TRACING=true`일 때만 외부로 보내므로 `.env.example`은 `false`로 둔다.
+
+### 서브에이전트
+
+에이전트는 `agents/이름/AGENT.md` 파일 하나로 정의한다. 머리말에 `name`, `description`, `tools`(Tool 이름 패턴, `!`는 제외), `max_steps`를 적고, 본문은 그 에이전트의 기본 지침(시스템 프롬프트 맨 앞)이 된다. `agents/main/AGENT.md`가 사용자와 대화하는 main이고, 없으면 시작하지 않는다.
+
+```
+---
+name: researcher
+description: 프로젝트 문서와 파일을 찾아 출처와 함께 조사 결과를 돌려준다(웹 검색 Tool이 연결되면 웹도).
+tools: [search_docs, files__read_*, web__tavily_search, web__tavily_extract]
+max_steps: 6
+---
+당신은 조사 담당 에이전트다. ...
+```
+
+- main은 시스템 프롬프트의 에이전트 목록을 보고, 검색을 여러 번 해야 하는 조사는 `delegate(agent, task)`로 맡긴다. 진행 중에는 `→ researcher에게 맡김`, 들여 쓴 진행 줄, `← researcher 완료`가 보인다.
+- 하위 에이전트는 새 이력으로 task 한 줄과 자기 본문만 받는다. main의 이력, 장기 메모리, 스킬, 되묻기(`ask_user`)는 받지 않는다. 일이 끝나면 이력은 버리고 최종 답만 `<untrusted>`로 감싸 main에게 돌려준다(최대 `TOOL_RESULT_MAX_CHARS`).
+- 하위 에이전트는 읽기 전용 Tool만 쓴다. 쓰기 Tool이 패턴에 걸리면 시작할 때 오류가 난다. 승인, Safety, Hook, 감사 로그는 main 것을 그대로 쓰고, 승인 메뉴에는 `[researcher]`가 붙는다.
+- 맡길 수 있는 깊이는 `SUBAGENT_MAX_DEPTH`(기본 1, 최대 3)다. 1이면 main만 맡긴다. 자기 자신과 부모 줄의 에이전트는 부르지 못한다. 하위 에이전트의 스텝 상한은 `AGENT.md`의 `max_steps`, 없으면 `SUBAGENT_MAX_STEPS`(기본 6)다.
+- 웹 검색(선택): `mcp.example.json`의 `web` 서버(Tavily)를 `mcp.json`에 옮기고 `"enabled": true`로 바꾼 뒤 `.env`에 `TAVILY_API_KEY`를 넣는다. main은 웹 Tool을 받지 않고(`!web__*`) researcher에게 맡겨야 쓴다.
 
 ### Safety와 Hook
 
@@ -87,10 +109,11 @@ uv run evals --provider anthropic --repeat 3   # 제공자를 바꾸고, 케이�
 uv run python scripts/trace_report.py          # 세션 목록(저장된 세션은 [이름]이 붙는다). show 세션이름 또는 세션번호 / total / compare 로 통계를 본다
 ```
 
-- 평가 케이스는 `evals/cases.jsonl`에 있다(git에 올린다). 카테고리는 tool, docs, approval, clarify, skill, memory, workflow, safety다. safety 케이스는 실제로 실행되면 안 되는 Tool(`forbid_executed`)과 평가 전용 문서 색인(`"knowledge": "fixtures"`)을 쓴다. 평가 전용 자료는 `evals/fixtures/`에 있고, 평가할 때 `data/sandbox/eval/`로 복사하고 `data/evals/index.sqlite`로 색인한다. workflow 케이스는 승인 단계의 답(`workflow_decisions`), 마지막 상태(`expect_status`), 고쳐 쓴 횟수 상한(`expect_max_revisions`)을 쓴다. memory 케이스는 앞선 턴(`setup_turns`), 마지막 질문 전 컴팩션(`compact_before`), 평가용 장기 메모리(`memory_items`)를 쓴다.
+- 평가 케이스는 `evals/cases.jsonl`에 있다(git에 올린다). 카테고리는 tool, docs, approval, clarify, skill, memory, workflow, safety, subagent다. subagent 케이스는 맡겨야 하는지(`expect_delegate`)를 보고, 하위 에이전트가 부른 Tool도 판정에 센다. 평가는 웹 서버(`web`)를 연결하지 않는다. safety 케이스는 실제로 실행되면 안 되는 Tool(`forbid_executed`)과 평가 전용 문서 색인(`"knowledge": "fixtures"`)을 쓴다. 평가 전용 자료는 `evals/fixtures/`에 있고, 평가할 때 `data/sandbox/eval/`로 복사하고 `data/evals/index.sqlite`로 색인한다. workflow 케이스는 승인 단계의 답(`workflow_decisions`), 마지막 상태(`expect_status`), 고쳐 쓴 횟수 상한(`expect_max_revisions`)을 쓴다. memory 케이스는 앞선 턴(`setup_turns`), 마지막 질문 전 컴팩션(`compact_before`), 평가용 장기 메모리(`memory_items`)를 쓴다.
 - 판정은 규칙 기반이다. 기대한 Tool 호출, 금지 Tool, 답에 있어야 할 표현, 있으면 안 되는 표현, 출처 표기, 실행한 Tool의 오류를 본다. 목표는 100% 통과다.
 - 결과는 `data/evals/실행번호.json`에 저장되고, 직전 실행에서 통과했는데 이번에 실패한 케이스를 회귀로 표시한다.
 - 추적 기록은 `logs/sessions/세션번호.jsonl`에 세션마다 남는다. 질문, 답, Tool 인자와 결과, 입력·출력 토큰 수를 담는다. 제공자가 토큰 수를 주지 않으면 tiktoken으로 계산하고 출처 태그(`provider`, `tiktoken`)를 붙인다.
+- 위임은 `delegate` 줄로 남고, 하위 에이전트의 줄에는 `agent`와 `parent`가 붙는다. `trace_report.py show`는 위임 횟수와 에이전트별 LLM 호출, 토큰을 보여 준다.
 - 추적 기록은 `.env`의 `TRACE_ENABLED=false`로 끈다. 민감한 내용이 들어갈 수 있어 `logs/`는 git에서 제외한다.
 
 ### MCP 서버 연결(선택)
@@ -105,6 +128,8 @@ uv run python examples/chat.py  # /tools 로 연결된 Tool과 출처를 확인�
 ```
 
 `mcp.json`의 서버마다 `"trusted": true`를 적으면, 그 서버의 읽기 전용 툴(MCP의 `readOnlyHint`가 true인 툴)은 승인 없이 자동 실행합니다. `trusted`를 적지 않으면 기본값은 false이고, 그 서버의 모든 툴은 실행 전에 승인 메뉴를 거칩니다. 쓰기 툴은 신뢰하더라도 승인을 거칩니다.
+
+서버가 읽기 전용 힌트를 주지 않는 Tool은 서버 항목의 `"read_only": [Tool 이름]`으로 읽기 전용으로 지정한다. `env` 값에 `"${TAVILY_API_KEY}"`처럼 쓰면 `.env`의 값으로 바꾸고, 그 변수가 없으면 시작할 때 오류가 난다(끈 서버는 읽지 않는다). 키를 `mcp.json`에 직접 적지 않기 위해서다.
 
 서버를 지우지 않고 잠시 끄려면 `"enabled": false`를 적습니다. 끈 서버는 연결하지 않으며, 설정 항목은 파일에 그대로 남깁니다. 기본값은 true입니다.
 
@@ -135,13 +160,16 @@ Python 3.12, 패키지 관리는 [uv](https://docs.astral.sh/uv/)를 쓴다.
 - **스텝(Step)**: 한 턴 안에서 모델을 한 번 호출하는 루프 한 바퀴 (`max_steps`)
 - **스트리밍(Streaming)**: 응답이 만들어지는 대로 글자 조각(델타)을 받는 방식. 반대는 일괄 응답(Batch)
 - **스킬(Skill)**: 절차와 지침을 담은 `SKILL.md` 파일. 모델에게는 이름과 한 줄 설명만 보이고, 필요하면 `load_skill` Tool로 본문을 불러온다.
+- **서브에이전트(Subagent, 하위 에이전트)**: main이 `delegate` Tool로 일을 맡기는 에이전트. 새 이력과 줄인 Tool로 일하고 최종 답만 돌려준다.
 - **툴 루프 에이전트(Tool loop agent)**: 모델이 Tool을 요청하고 결과를 받아 다시 답하는 과정을 반복하는 에이전트(ReAct 방식). 지금 `run_agent`가 이것이다.
 - 그 밖의 용어는 Notion의 Terminology 페이지에 정리한다.
 
 ## 구조
 
 - `src/ai_agent_dock/core/llm/`: 제공자 독립 LLM 호출(`call_llm`, 스트리밍은 `on_text_delta`)과 OpenAI·Anthropic 어댑터
-- `src/ai_agent_dock/core/runtime/`: Agent Loop(`run_agent`), 설정·결과 타입(`AgentSettings`, `AgentResult`), 시스템 프롬프트 조립(`prompt.py`의 `build_system_prompt`: 기본 지침, 장기 메모리, 스킬 목록, 출처 규칙 순서)
+- `src/ai_agent_dock/core/runtime/`: Agent Loop(`run_agent`), 설정·결과 타입(`AgentConfig`, `AgentResult`). 시스템 프롬프트 조립은 `core/agents/system_prompt.py`
+- `src/ai_agent_dock/core/agents/`: 서브에이전트. `AGENT.md` 읽기와 Tool 패턴(`loader.py`), 시스템 프롬프트 조립(`system_prompt.py`), 에이전트 설정 만들기와 `delegate` Tool(`team.py`의 `AgentTeam.config_for`)
+- `agents/`: 에이전트 정의(`main/AGENT.md`, `researcher/AGENT.md`)
 - `src/ai_agent_dock/core/hitl/`: 사람 개입. 승인 메뉴(`approval.py`), 되묻기 Tool(`clarify.py`), 감사 로그(`audit.py`)
 - `src/ai_agent_dock/core/evals/`: 평가. 케이스 읽기와 규칙 판정(`score.py`), 실행과 결과 저장, 회귀 표시(`run.py`)
 - `src/ai_agent_dock/core/observability/`: 관측. 세션별 추적 기록(`trace.py`)과 추적 리포트 계산(`report.py`)

@@ -1,6 +1,6 @@
 """대화 세션: 한 대화의 이력을 보관하고, 턴(질문 하나)마다 Agent Loop를 돌려 이력을 이어 준다.
 
-세션은 이력과 에이전트 설정(AgentSettings)만 소유한다. 턴 처리는 run_agent가 하고, 세션은 그 결과의 이력을 다음 턴으로 넘길 뿐이다.
+세션은 이력과 에이전트 설정(AgentConfig)만 소유한다. 턴 처리는 run_agent가 하고, 세션은 그 결과의 이력을 다음 턴으로 넘길 뿐이다.
 """
 
 from __future__ import annotations
@@ -11,19 +11,18 @@ from functools import partial
 
 from ..llm import Message, UserMessage
 from ..runtime.loop import run_agent
-from ..runtime.prompt import DEFAULT_SYSTEM_PROMPT
 from ..llm import LLMRequest
 from ..llm.tokens import request_tokens
-from ..runtime.types import AgentResult, AgentSettings, Usage
+from ..runtime.types import AgentResult, AgentConfig, Usage
 
-__all__ = ["DEFAULT_SYSTEM_PROMPT", "Session"]  # DEFAULT_SYSTEM_PROMPT는 기존 import 경로를 위해 여기서도 내보낸다.
+__all__ = ["Session"]
 
 
 class Session:
     """여러 턴의 대화를 이어 가는 세션. 이력은 메모리에만 있고 프로그램을 끄면 사라진다."""
 
-    def __init__(self, settings: AgentSettings):
-        self.settings = settings  # 모든 턴이 같은 설정(모델, Tool, 지침, 최대 스텝)을 쓴다.
+    def __init__(self, config: AgentConfig):
+        self.config = config  # 모든 턴이 같은 설정(모델, Tool, 지침, 최대 스텝)을 쓴다.
         self.history: list[Message] = []
         self.last_usage = Usage()  # 마지막 턴의 토큰(/tokens)
         self.total_usage = Usage()  # 이번 세션의 누적 토큰(/tokens)
@@ -31,16 +30,16 @@ class Session:
 
     def record_start(self) -> None:
         """세션 설정은 세션의 첫 턴 직전에 한 번만 기록한다(C8 D18). 질문 없이 끝난 세션은 추적 파일을 만들지 않는다."""
-        tracer = self.settings.tracer
+        tracer = self.config.tracer
         if tracer is None or self.trace_started:
             return
         tracer.record(
             "session_start",
             None,
-            system_prompt=self.settings.system_prompt,
-            tools=[{"name": t.name, "description": t.description, "parameters": t.parameters} for t in self.settings.tools],
-            model=self.settings.config.model,
-            max_steps=self.settings.max_steps,
+            system_prompt=self.config.system_prompt,
+            tools=[{"name": t.name, "description": t.description, "parameters": t.parameters} for t in self.config.tools],
+            model=self.config.llm_config.model,
+            max_steps=self.config.max_steps,
         )
         self.trace_started = True
 
@@ -48,14 +47,14 @@ class Session:
         """턴 하나를 처리한다. 모델 호출이 예외로 실패하면 예외가 그대로 전달되고 이력은 바뀌지 않는다.
 
         on_text_delta를 주면 모든 스텝의 답 글자 조각을 도착하는 대로 전달한다(스트리밍).
-        이때 settings.llm은 on_text_delta 키워드 인자를 받아야 한다(call_llm은 받는다). 이력 처리는 스트리밍 여부와 같다.
+        이때 config.llm은 on_text_delta 키워드 인자를 받아야 한다(call_llm은 받는다). 이력 처리는 스트리밍 여부와 같다.
         """
         if on_text_delta is not None:
-            settings = replace(self.settings, llm=partial(self.settings.llm, on_text_delta=on_text_delta))
+            config = replace(self.config, llm=partial(self.config.llm, on_text_delta=on_text_delta))
         else:
-            settings = self.settings
+            config = self.config
         self.record_start()
-        result = run_agent(settings, question, history=self.history)
+        result = run_agent(config, question, history=self.history)
         # 예외가 나면 이 줄에 도달하지 않으므로 실패한 턴은 이력에 남지 않는다.
         # max_steps로 끝난 턴도 모든 Tool 요청에 결과가 붙어 있어 이력이 일관되므로 그대로 유지한다.
         self.history = result.history
@@ -65,7 +64,7 @@ class Session:
 
     def history_tokens(self) -> int:
         """지금 이력 크기: 다음 호출에 보낼 시스템 프롬프트, 이력, Tool 정의의 토큰 수."""
-        request = LLMRequest(config=self.settings.config, messages=self.history, system_prompt=self.settings.system_prompt, tools=self.settings.tools)
+        request = LLMRequest(config=self.config.llm_config, messages=self.history, system_prompt=self.config.system_prompt, tools=self.config.tools)
         return request_tokens(request)
 
     def add_user_message(self, text: str) -> None:

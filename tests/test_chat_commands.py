@@ -9,7 +9,7 @@ from fakes import TEST_CONFIG, FakeLLM, final
 
 from ai_agent_dock.core.commands import COMMANDS, CommandContext, find_command, help_text
 from ai_agent_dock.core.memory import MemoryStore
-from ai_agent_dock.core.runtime.types import AgentSettings
+from ai_agent_dock.core.runtime.types import AgentConfig
 from ai_agent_dock.core.session import Session
 from ai_agent_dock.core.session.store import SessionStore
 from ai_agent_dock.core.tools import BUILTIN_TOOLS, ToolRegistry
@@ -21,7 +21,7 @@ def make_ctx(tmp_path, answers=("답",)):
     registry = ToolRegistry()
     registry.add_all(BUILTIN_TOOLS, source="builtin")
     memory = MemoryStore(tmp_path / "memory.md")
-    session = Session(AgentSettings(config=TEST_CONFIG, tools=registry.tools(), llm=FakeLLM([final(a) for a in answers])))
+    session = Session(AgentConfig(llm_config=TEST_CONFIG, tools=registry.tools(), llm=FakeLLM([final(a) for a in answers])))
     return CommandContext(
         session=session,
         registry=registry,
@@ -77,13 +77,13 @@ def test_after_turn_saves_and_sessions_resume_by_number(tmp_path):
 def test_memory_commands_reload_the_prompt_and_remove_asks_first(tmp_path):
     ctx = make_ctx(tmp_path)
     run(ctx, "/memory-add 반려견은 콩")
-    assert "반려견은 콩" in ctx.session.settings.system_prompt
+    assert "반려견은 콩" in ctx.session.config.system_prompt
 
     command, arg = find_command("/memory-delete 1")
     assert command.confirm(ctx, arg) == "'반려견은 콩'을 지울까요?"
     assert command.confirm(ctx, "5") is None  # 없는 번호는 묻지 않고 사용법을 보여 준다.
     assert run(ctx, "/memory-delete 1") == "1번을 지웠습니다. 다음 턴부터 반영합니다."
-    assert "반려견은 콩" not in ctx.session.settings.system_prompt
+    assert "반려견은 콩" not in ctx.session.config.system_prompt
 
 
 def test_tokens_and_compact_report_sizes(tmp_path):
@@ -109,7 +109,7 @@ def test_switched_sessions_get_their_own_session_start(tmp_path):
     from ai_agent_dock.core.observability import Tracer
 
     ctx = make_ctx(tmp_path, answers=("첫 답", "둘째 답", "셋째 답"))
-    ctx.session.settings = ctx.session.settings.__class__(**{**ctx.session.settings.__dict__, "tracer": Tracer(tmp_path / "trace")})
+    ctx.session.config = ctx.session.config.__class__(**{**ctx.session.config.__dict__, "tracer": Tracer(tmp_path / "trace")})
     ctx.session.ask("첫 질문")
     ctx.after_turn("첫 질문")
     first = ctx.tracer.path

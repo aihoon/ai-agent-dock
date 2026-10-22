@@ -30,11 +30,11 @@ def scan_skills(root: Path) -> list[SkillMeta]:
 
 def read_skill(meta: SkillMeta) -> Skill:
     """스킬 파일에서 본문을 읽는다. 머리말 아래의 내용만 돌려준다."""
-    _, body = _split_frontmatter(meta.path.read_text(encoding="utf-8"), meta.path)
+    _, body = split_frontmatter(meta.path.read_text(encoding="utf-8"), meta.path)
     return Skill(meta=meta, body=body.strip())
 
 
-def build_index(metas: list[SkillMeta]) -> str:
+def build_skill_index(metas: list[SkillMeta]) -> str:
     """시스템 프롬프트에 넣을 스킬 목록 문장. 스킬이 없으면 빈 문자열이다(본문은 넣지 않는다)."""
     if not metas:
         return ""
@@ -72,7 +72,7 @@ def make_load_skill_tool(metas: list[SkillMeta]) -> Tool:
 
 
 def _read_meta(path: Path, folder_name: str) -> SkillMeta:
-    fields, _ = _split_frontmatter(path.read_text(encoding="utf-8"), path)
+    fields, _ = split_frontmatter(path.read_text(encoding="utf-8"), path)
     name = fields.get("name", "")
     description = fields.get("description", "")
     if not name:
@@ -86,7 +86,8 @@ def _read_meta(path: Path, folder_name: str) -> SkillMeta:
     return SkillMeta(name=name, description=description, path=path)
 
 
-def _split_frontmatter(text: str, path: Path) -> tuple[dict[str, str], str]:
+def split_frontmatter(text: str, path: Path) -> tuple[dict[str, str], str]:
+    """(머리말 항목, 본문). 에이전트 정의(core/agents의 AGENT.md)도 같은 형식이라 이 함수를 쓴다."""
     lines = text.splitlines()
     if not lines or lines[0].strip() != "---":
         raise SkillFormatError(f"{path}: 맨 위에 --- 로 시작하는 머리말이 없다")

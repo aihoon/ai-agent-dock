@@ -40,13 +40,17 @@ def ask_in_terminal(
     input_fn: Callable[[str], str] = input,
     print_fn: Callable[[str], None] = print,
     notice: str | None = None,
+    agent: str | None = None,
 ) -> Approval:
-    """번호 메뉴로 승인을 묻는다. 대화형 입력이 없으면 승인을 받을 수 없으므로 거부한다(D6)."""
+    """번호 메뉴로 승인을 묻는다. 대화형 입력이 없으면 승인을 받을 수 없으므로 거부한다(D6).
+
+    agent는 하위 에이전트의 요청일 때 그 이름이다. 메뉴 머리에 [이름]을 붙인다(C12 Q7).
+    """
     if not interactive:
         return Approval.deny("승인을 받을 수 없는 실행이라 거부했다")
     if notice:  # 이번 턴의 지시문 의심 경고(C11 D15)
         print_fn(notice)
-    print_fn(f"[승인 요청] {call.name}")
+    print_fn(f"[승인 요청] {f'[{agent}] ' if agent else ''}{call.name}")
     print_fn(f"  인자: {_preview(call.arguments)}")
     print_fn("  1) 승인하고 실행")
     print_fn("  2) 거부")

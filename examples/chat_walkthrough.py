@@ -13,6 +13,7 @@
   uv run python examples/chat_walkthrough.py --scenario rag      # 모델 없이: 문서를 검색해 출처를 붙여 답하는 모습(임베딩도 가짜)
   uv run python examples/chat_walkthrough.py --scenario safety   # 모델 없이: 파일 속 지시문 → 경고 붙은 결과 → 경고가 있는 승인 메뉴 → 거부, 안전 정책 차단
   uv run python examples/chat_walkthrough.py --scenario workflow # 모델 없이: 워크플로가 고쳐 쓰기 → 승인 대기 → (껐다 켜고) 재개하는 모습
+  uv run python examples/chat_walkthrough.py --scenario subagent # 모델 없이: main이 researcher에게 맡기고 답만 받는 모습(C12)
   uv run python examples/chat_walkthrough.py --stream "17*23은 얼마야?"    # 실제 모델로 스트리밍
   uv run python examples/chat_walkthrough.py "17*23은 얼마야?" "거기에 2를 곱해 줘"   # 실제 모델로 여러 턴
   uv run python examples/chat_walkthrough.py --provider anthropic "안녕" "내가 방금 뭐라고 했지?"
@@ -33,13 +34,14 @@ from dotenv import load_dotenv
 from langgraph.checkpoint.sqlite import SqliteSaver
 from walkthrough import Tracer, ask, banner, describe, scripted  # C1 워크스루의 도구를 재사용한다.
 
+from ai_agent_dock.core.agents import MAIN, AgentTeam, build_agent_index, load_agents
 from ai_agent_dock.core.hitl import Approval, ask_in_terminal
 from ai_agent_dock.core.llm import LLMConfig, LLMResponse, Tool, ToolCall, call_llm, config_from_env
 from ai_agent_dock.core.observability import Tracer as TraceFile
 from ai_agent_dock.core.orchestration import WorkflowContext, WorkflowRunner
 from ai_agent_dock.core.retrieval import HashingEmbedder, Knowledge, KnowledgeIndex, make_search_docs_tool
 from ai_agent_dock.core.runtime.loop import run_agent
-from ai_agent_dock.core.runtime.types import AgentSettings
+from ai_agent_dock.core.runtime.types import AgentConfig
 from ai_agent_dock.core.safety import SafetyPolicy, with_safety
 from ai_agent_dock.core.safety.policy import Rule
 from ai_agent_dock.core.session import Session
@@ -222,7 +224,7 @@ def hitl_write_tool(tracer):
 def main():
     parser = argparse.ArgumentParser(description="여러 턴 대화의 단계별 출력 데모")
     parser.add_argument("questions", nargs="*", help="실제 모델에 차례로 보낼 질문들(생략하면 기본 두 질문)")
-    parser.add_argument("--scenario", choices=[*SCENARIOS, "workflow", "safety"], help="모델 없이 시나리오 실행")
+    parser.add_argument("--scenario", choices=[*SCENARIOS, "workflow", "safety", "subagent"], help="모델 없이 시나리오 실행")
     parser.add_argument("--provider", help="LLM 제공자(openai, anthropic). 생략하면 .env의 LLM_PROVIDER")
     parser.add_argument("--max-steps", type=int, help="한 턴에서 모델을 호출하는 횟수 상한")
     parser.add_argument("--stream", action="store_true", help="스트리밍으로 받아 글자 조각이 도착하는 모습을 보여 준다")
@@ -234,15 +236,17 @@ def main():
         return walk_workflow()
     if args.scenario == "safety":
         return walk_safety()
+    if args.scenario == "subagent":
+        return walk_subagent()
 
     if args.scenario:
         questions, model, scenario_steps = SCENARIOS[args.scenario]
-        config = LLMConfig(provider="scenario", model="scenario", max_output_tokens=None)  # 가짜 모델은 설정을 읽지 않는다.
+        llm_config = LLMConfig(provider="scenario", model="scenario", max_output_tokens=None)  # 가짜 모델은 설정을 읽지 않는다.
         mode = f"가짜 모델(시나리오: {args.scenario})"
     else:
         questions = args.questions or ["17*23은 얼마야?", "거기에 2를 곱해 줘"]
         model, scenario_steps = call_llm, None
-        config = config_from_env(args.provider)
+        llm_config = config_from_env(args.provider)
         mode = f"실제 모델(제공자: {args.provider or '.env의 LLM_PROVIDER'})"
     max_steps = args.max_steps or scenario_steps
 
@@ -271,8 +275,8 @@ def main():
     tracer = TurnTracer(call_model)
     with ExitStack() as stack:  # mcp 시나리오가 띄운 MCP 서버는 이 with가 끝날 때 정리된다.
         approve = scripted_approver(Approval.approve(), Approval.deny("경로가 틀렸다")) if args.scenario == "hitl" else None
-        settings = AgentSettings(config=config, tools=build_tools(args.scenario, tracer, stack), max_steps=max_steps, llm=tracer.llm, approve=approve)
-        session = Session(settings)
+        config = AgentConfig(llm_config=llm_config, tools=build_tools(args.scenario, tracer, stack), max_steps=max_steps, llm=tracer.llm, approve=approve)
+        session = Session(config)
         walk(session, tracer, questions, turn_models, holder, delta, mode, max_steps)
 
 
@@ -305,7 +309,7 @@ def walk(session, tracer, questions, turn_models, holder, delta, mode, max_steps
     banner("시작")
     print(f"모드    : {mode}")
     print(f"질문 수 : {len(questions)}턴")
-    print(f"Tool    : {', '.join(t.name for t in session.settings.tools)}")
+    print(f"Tool    : {', '.join(t.name for t in session.config.tools)}")
     print(f"턴당 최대 스텝: {max_steps or '(.env의 AGENT_MAX_STEPS 또는 기본 10)'}")
 
     for turn, question in enumerate(questions, 1):
@@ -353,26 +357,108 @@ def walk_safety():
         ask("c3", "files__move_file", source="note.md"),
         final("안전 정책으로 막혀 옮기지 못했습니다."),
     )
-    config = LLMConfig(provider="scenario", model="scenario", max_output_tokens=None)
+    llm_config = LLMConfig(provider="scenario", model="scenario", max_output_tokens=None)
     policy = SafetyPolicy({"files__move_file": Rule(mode="deny")})
-    settings, safety = with_safety(
-        AgentSettings(config=config, tools=tools, llm=llm),
+    config, safety = with_safety(
+        AgentConfig(llm_config=llm_config, tools=tools, llm=llm),
         policy=policy,
         on_block=lambda name, reason: print(f"  ⛔ 안전 정책으로 막았습니다: {name} ({reason})"),
     )
-    settings.approve = lambda call: ask_in_terminal(call, interactive=True, input_fn=lambda p: print(f"{p}2") or "2", notice=safety.notice())
+    config.approve = lambda call: ask_in_terminal(call, interactive=True, input_fn=lambda p: print(f"{p}2") or "2", notice=safety.notice())
 
     banner("턴 1: 지시문이 든 파일 요약")
-    result = run_agent(settings, "note.md를 읽고 요약해 줘")
+    result = run_agent(config, "note.md를 읽고 요약해 줘")
     for m in result.history:
         if m.role == "tool":
             print(f"  [모델에게 간 Tool 결과]\n    " + m.content.replace("\n", "\n    "))
     print(f"  답: {result.answer}")
     banner("턴 2: 안전 정책이 막은 Tool")
-    result = run_agent(settings, "note.md를 archive.md로 옮겨 줘")
+    result = run_agent(config, "note.md를 archive.md로 옮겨 줘")
     print(f"  답: {result.answer}")
     banner("끝")
     print(f"  실제로 실행된 Tool: {ran}  (쓰기와 옮기기는 실행되지 않았다)")
+
+
+def walk_subagent():
+    """서브에이전트(C12)를 가짜 모델로 보여 준다. main이 researcher에게 맡기고, researcher는 새 이력과 줄인 Tool로
+    문서를 찾은 뒤 답만 돌려준다. main의 이력에는 researcher의 검색 결과가 들어가지 않는다.
+
+    줄 머리의 [main], [researcher]가 지금 일하는 에이전트다. researcher의 줄은 한 칸 더 들여 쓴다.
+    스텝은 에이전트마다 따로 센다(researcher의 스텝 1, 2는 main의 스텝 1 안에서 일어난다)."""
+    schema = {"type": "object", "properties": {"query": {"type": "string"}}}
+    doc = "[에이전트 루프, 최대 스텝] 한 턴에서 모델을 부르는 횟수의 상한은 AGENT_MAX_STEPS다."
+    question = "에이전트 루프의 최대 스텝은 어떻게 정해져?"
+    task = "프로젝트 문서에서 에이전트 루프의 최대 스텝이 어떻게 정해지는지 출처와 함께 조사해"
+    script = scripted(
+        ask("c1", "delegate", agent="researcher", task=task),  # main 스텝 1
+        ask("s1", "search_docs", query="최대 스텝"),  # researcher 스텝 1
+        final("최대 스텝은 AGENT_MAX_STEPS로 정한다 [에이전트 루프, 최대 스텝]."),  # researcher 스텝 2
+        final("한 턴의 최대 스텝은 AGENT_MAX_STEPS 설정으로 정해집니다 [에이전트 루프, 최대 스텝]."),  # main 스텝 2
+    )
+    stack, steps = [MAIN], {MAIN: 0}  # 지금 일하는 에이전트(맨 끝)와 에이전트별 스텝 번호
+
+    def say(text):
+        print("  " * len(stack) + f"[{stack[-1]}] {text}")
+
+    def run_tool(name, result):
+        def func(**arguments):
+            say(f"  Tool 실행: {name}({arguments}) → {result}")
+            return result
+
+        return func
+
+    tools = [
+        Tool("search_docs", "문서 검색(워크스루용 가짜)", schema, run_tool("search_docs", doc), read_only=True, trusted=True, untrusted_output=True),
+        Tool("calculate", "계산(워크스루용 가짜)", schema, run_tool("calculate", "2"), read_only=True, trusted=True),
+    ]
+
+    def llm(request, on_text_delta=None):
+        name = stack[-1]
+        steps[name] += 1
+        # 입력은 이번 스텝에 새로 들어간 메시지만 보인다(앞 스텝의 이력은 모델에게 같이 가지만 이미 본 것이다).
+        last = max((i for i, m in enumerate(request.messages) if m.role == "assistant"), default=-1)
+        say(f"스텝 {steps[name]}: 모델 호출")
+        for m in request.messages[last + 1 :]:
+            say(f"  입력: {describe(m)}")
+        response = script(request)
+        for c in response.tool_calls:
+            say(f"  출력: Tool 요청 {c.name}({c.arguments})")
+        if not response.tool_calls:
+            say(f"  출력: 최종 답 \"{response.text}\" → 이 에이전트의 루프가 끝난다")
+        return response
+
+    def start(name, task):
+        say(f"  Tool 실행: delegate → {name}를 새 이력으로 시작한다(main의 이력과 메모리는 넘기지 않는다)")
+        stack.append(name)
+        steps[name] = 0
+        say(f"시작. 받은 것: task 한 줄과 {name}의 AGENT.md 본문(시스템 프롬프트)")
+
+    def end(name, result):
+        say(f"끝(스텝 {result.steps}번). 이력 {len(result.history)}개는 버리고 최종 답만 main에게 돌려준다")
+        stack.pop()
+        say("  delegate 결과: researcher의 답을 <untrusted>로 감싸 main의 이력에 Tool 결과로 넣는다")
+
+    llm_config = LLMConfig(provider="scenario", model="scenario", max_output_tokens=None)
+    team = AgentTeam(load_agents(Path(__file__).resolve().parent.parent / "agents"), on_start=start, on_end=end)
+    config, _ = with_safety(AgentConfig(llm_config=llm_config, tools=tools, llm=llm))
+    main_config = team.config_for(MAIN, config)
+    researcher_config = team.config_for("researcher", config, depth=1, parents=(MAIN,))
+
+    banner("두 에이전트의 설정")
+    print(f"  main       Tool: {', '.join(t.name for t in main_config.tools)}")
+    print(f"  researcher Tool: {', '.join(t.name for t in researcher_config.tools)}  (delegate가 없다: 깊이 상한 1)")
+    print("  main의 시스템 프롬프트 중 에이전트 목록:")
+    print("    " + build_agent_index(team.targets(MAIN)).replace("\n", "\n    "))
+
+    banner("턴 1")
+    print(f"  사용자 질문: {question}")
+    result = run_agent(main_config, question)
+
+    banner("턴 1이 끝난 뒤 main의 이력(researcher의 검색 결과는 없다)")
+    for i, m in enumerate(result.history, 1):
+        print(f"  {i}. {describe(m)}")
+    print(f"  답: {result.answer}")
+    print(f"  스텝: main {steps[MAIN]}번, researcher {steps['researcher']}번(main의 스텝 1 안에서 일어났다)")
 
 
 def walk_workflow():
@@ -386,14 +472,14 @@ def walk_workflow():
         ask("c1", "search_docs", query="Tool 정의 인자 스키마"),
         final("Tool은 이름, 설명, 인자 스키마, 실행 함수로 정의합니다 [Tool과 MCP, Tool 정의]."),
     )
-    config = LLMConfig(provider="scenario", model="scenario", max_output_tokens=None)
+    llm_config = LLMConfig(provider="scenario", model="scenario", max_output_tokens=None)
     with tempfile.TemporaryDirectory() as tmp:
         trace = TraceFile(Path(tmp))
-        settings = AgentSettings(config=config, tools=BUILTIN_TOOLS, llm=llm, tracer=trace)
+        config = AgentConfig(llm_config=llm_config, tools=BUILTIN_TOOLS, llm=llm, tracer=trace)
         db = Path(tmp) / "checkpoints.sqlite"
 
         def runner(conn):
-            return WorkflowRunner(WORKFLOWS, WorkflowContext(settings=settings, knowledge=knowledge), SqliteSaver(conn))
+            return WorkflowRunner(WORKFLOWS, WorkflowContext(config=config, knowledge=knowledge), SqliteSaver(conn))
 
         banner("워크플로 시작: /workflow answer-check Tool은 무엇으로 정의하나?")
         conn = sqlite3.connect(db, check_same_thread=False)

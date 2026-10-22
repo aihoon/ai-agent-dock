@@ -5,13 +5,15 @@ import json
 from fakes import TEST_CONFIG, FakeLLM, final, tool_call
 
 from ai_agent_dock.core.evals import Case, evaluate
-from ai_agent_dock.core.llm import AssistantMessage, LLMRequest, LLMResponse, ToolCall, ToolMessage, UserMessage
+from ai_agent_dock.core.llm import AssistantMessage, LLMRequest, LLMResponse, Tool, ToolCall, ToolMessage, UserMessage
 from ai_agent_dock.core.llm.providers import anthropic as anthropic_provider
 from ai_agent_dock.core.llm.providers import openai as openai_provider
 from ai_agent_dock.core.memory import MemoryStore
 from ai_agent_dock.core.runtime.loop import run_agent
-from ai_agent_dock.core.runtime.prompt import DEFAULT_SYSTEM_PROMPT, build_system_prompt
-from ai_agent_dock.core.runtime.types import AgentSettings
+from ai_agent_dock.core.agents import build_system_prompt
+
+BASE = "기본 지침"  # AGENT.md 본문 자리(C12)
+from ai_agent_dock.core.runtime.types import AgentConfig
 from ai_agent_dock.core.session import Session
 from ai_agent_dock.core.session.compact import SUMMARY_HEADER, compact, split_turns
 from ai_agent_dock.core.session.store import SessionRecord, SessionStore, auto_name
@@ -137,9 +139,10 @@ def test_memory_goes_right_after_the_base_prompt():
     from ai_agent_dock.core.skills import SkillMeta
 
     skill = SkillMeta(name="요약", description="글을 짧게 줄인다", path=Path("x"))
-    text = build_system_prompt(skills=[skill], cite_docs=True, memory=["반려견은 콩"])
-    assert text.index(DEFAULT_SYSTEM_PROMPT) < text.index("반려견은 콩") < text.index("글을 짧게") < text.index(CITATION_RULE)
-    assert "장기 메모리" not in build_system_prompt()
+    tools = [Tool(name, "", {"type": "object", "properties": {}}, lambda: "") for name in ("load_skill", "search_docs")]
+    text = build_system_prompt(BASE, tools, skills=[skill], memory=["반려견은 콩"])
+    assert text.index(BASE) < text.index("반려견은 콩") < text.index("글을 짧게") < text.index(CITATION_RULE)
+    assert "장기 메모리" not in build_system_prompt(BASE, [])
 
 
 # --- 캐싱과 토큰 ---
@@ -171,7 +174,7 @@ def test_session_tracks_last_turn_and_cumulative_usage_separately_from_history_s
         LLMResponse(text="5", input_tokens=120, output_tokens=5),
         LLMResponse(text="안녕", input_tokens=150, output_tokens=3),
     ]
-    session = Session(AgentSettings(config=TEST_CONFIG, tools=BUILTIN_TOOLS, llm=FakeLLM(responses)))
+    session = Session(AgentConfig(llm_config=TEST_CONFIG, tools=BUILTIN_TOOLS, llm=FakeLLM(responses)))
 
     session.ask("2+3은?")
     session.ask("안녕")
@@ -193,7 +196,7 @@ def test_evaluate_sends_setup_turns_compacts_and_checks_only_the_last_turn():
         return history
 
     case = Case(id="m", category="memory", question="내 이름은?", setup_turns=["내 이름은 훈", "1+1은?"], compact_before=True, forbid_tools=["calculate"], expect_contains=["훈"])
-    outcome = evaluate(case, lambda _c: AgentSettings(config=TEST_CONFIG, tools=BUILTIN_TOOLS, llm=llm), compactor=compactor)
+    outcome = evaluate(case, lambda _c: AgentConfig(llm_config=TEST_CONFIG, tools=BUILTIN_TOOLS, llm=llm), compactor=compactor)
 
     assert outcome.passed, outcome.failures  # 앞선 턴의 calculate는 판정에 넣지 않는다
     assert compacted == [6]

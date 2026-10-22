@@ -6,7 +6,8 @@ from ..llm import Tool
 from .types import KnowledgeSearch
 
 CITATION_RULE = (
-    "문서 내용으로 답할 때는 search_docs로 먼저 찾는다. 쓴 내용의 근거마다 [문서 제목, 위치]를 붙인다(예: [에이전트 루프, 최대 스텝]). "
+    "문서 내용으로 답할 때는 search_docs로 먼저 찾는다. "
+    "쓴 내용의 근거마다 [문서 제목, 위치]를 붙인다(예: [에이전트 루프, 최대 스텝]). "
     "검색 결과에 근거가 없으면 모른다고 답하고, 근거를 지어내지 않는다."
 )
 

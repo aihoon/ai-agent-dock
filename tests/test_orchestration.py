@@ -12,7 +12,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from ai_agent_dock.core.observability import Tracer
 from ai_agent_dock.core.orchestration import WAITING, WorkflowContext, WorkflowRunner
 from ai_agent_dock.core.retrieval import Hit, Knowledge
-from ai_agent_dock.core.runtime.types import AgentSettings
+from ai_agent_dock.core.runtime.types import AgentConfig
 from ai_agent_dock.core.tools import BUILTIN_TOOLS
 from ai_agent_dock.workflows import WORKFLOWS
 from ai_agent_dock.workflows.answer_check import NO_EVIDENCE, citation_problem
@@ -31,9 +31,9 @@ def cited_answer():
 
 
 def make_runner(responses, checkpointer=None, tracer=None, knowledge=True, repeat_last=False):
-    settings = AgentSettings(config=TEST_CONFIG, tools=BUILTIN_TOOLS, llm=FakeLLM(responses, repeat_last=repeat_last), tracer=tracer)
+    config = AgentConfig(llm_config=TEST_CONFIG, tools=BUILTIN_TOOLS, llm=FakeLLM(responses, repeat_last=repeat_last), tracer=tracer)
     kb = Knowledge(store=FakeStore(), seen=set(), files=1, chunks=1) if knowledge else None
-    return WorkflowRunner(WORKFLOWS, WorkflowContext(settings=settings, knowledge=kb, max_revisions=2), checkpointer or InMemorySaver())
+    return WorkflowRunner(WORKFLOWS, WorkflowContext(config=config, knowledge=kb, max_revisions=2), checkpointer or InMemorySaver())
 
 
 def test_citation_check_passes_only_with_searched_citations():
@@ -56,7 +56,7 @@ def test_answer_without_citation_is_revised_up_to_the_limit_then_gives_up():
     done = runner.start("answer-check", "최대 스텝은?")
     assert (done.status, done.revisions) == ("no_evidence", 2)
     assert done.answer.startswith(NO_EVIDENCE)
-    retry_prompt = runner.context.settings.llm.calls[1][0].content  # 두 번째 답 작성의 첫 메시지
+    retry_prompt = runner.context.config.llm.calls[1][0].content  # 두 번째 답 작성의 첫 메시지
     assert "[이전 답]" in retry_prompt and "출처 없음" in retry_prompt
 
 
@@ -79,7 +79,7 @@ def test_reject_ends_without_an_answer_and_revise_goes_back_to_writing():
     first = runner.start("answer-check", "최대 스텝은?")
     again = runner.resume(first.run_id, "revise:더 짧게")
     assert (again.status, again.revisions) == (WAITING, 1)
-    assert "사용자 요청: 더 짧게" in runner.context.settings.llm.calls[2][0].content
+    assert "사용자 요청: 더 짧게" in runner.context.config.llm.calls[2][0].content
 
     rejected = runner.resume(again.run_id, "reject")
     assert rejected.status == "rejected" and rejected.answer is None
@@ -143,7 +143,7 @@ def make_ctx(tmp_path, responses):
 
     runner = make_runner(responses)
     return CommandContext(
-        session=Session(runner.context.settings),
+        session=Session(runner.context.config),
         registry=ToolRegistry(),
         skills=[],
         store=SessionStore(tmp_path / "sessions"),
@@ -199,19 +199,19 @@ def test_workflows_lists_waiting_runs_and_resume_brings_back_the_approval_reques
 def test_workflow_case_answers_approvals_in_order_and_checks_status_and_revisions():
     from ai_agent_dock.core.evals import Case, evaluate
 
-    def make_settings(_case):
-        return AgentSettings(config=TEST_CONFIG, tools=BUILTIN_TOOLS, llm=FakeLLM(cited_answer() + cited_answer()))
+    def make_config(_case):
+        return AgentConfig(llm_config=TEST_CONFIG, tools=BUILTIN_TOOLS, llm=FakeLLM(cited_answer() + cited_answer()))
 
-    def workflows(settings):
+    def workflows(config):
         kb = Knowledge(store=FakeStore(), seen=set(), files=1, chunks=1)
-        return WorkflowRunner(WORKFLOWS, WorkflowContext(settings=settings, knowledge=kb), InMemorySaver())
+        return WorkflowRunner(WORKFLOWS, WorkflowContext(config=config, knowledge=kb), InMemorySaver())
 
     case = Case(id="w", category="workflow", question="최대 스텝은?", workflow="answer-check",
                 workflow_decisions=["revise:짧게", "approve"], expect_status="approved", expect_max_revisions=1, expect_citation=True)
-    assert evaluate(case, make_settings, workflows=workflows).passed
+    assert evaluate(case, make_config, workflows=workflows).passed
 
     strict = Case(**{**case.__dict__, "expect_max_revisions": 0, "expect_status": "rejected"})
-    failures = evaluate(strict, make_settings, workflows=workflows).failures
+    failures = evaluate(strict, make_config, workflows=workflows).failures
     assert failures == ["워크플로가 rejected가 아니라 approved로 끝났다", "고쳐 쓴 횟수 1가 상한 0를 넘었다"]
 
 
@@ -220,14 +220,14 @@ def test_answer_check_agent_gets_search_docs_but_not_ask_user():
 
     runner = make_runner(cited_answer())
     seen_tools = []
-    real_llm = runner.context.settings.llm
+    real_llm = runner.context.config.llm
 
     def spy(request, on_text_delta=None):
         seen_tools.append({t.name for t in request.tools})
         return real_llm(request)
 
-    runner.context.settings.tools = [*BUILTIN_TOOLS, make_ask_user_tool(lambda prompt: "")]
-    runner.context.settings.llm = spy
+    runner.context.config.tools = [*BUILTIN_TOOLS, make_ask_user_tool(lambda prompt: "")]
+    runner.context.config.llm = spy
     runner.start("answer-check", "최대 스텝은?")
     assert "search_docs" in seen_tools[0] and "ask_user" not in seen_tools[0]  # C10 D23
 
@@ -236,7 +236,7 @@ def test_safety_applies_inside_the_workflow_agent():  # C11 D17
     from ai_agent_dock.core.safety import with_safety
 
     runner = make_runner(cited_answer())
-    runner.context.settings, _ = with_safety(runner.context.settings)
+    runner.context.config, _ = with_safety(runner.context.config)
     runner.start("answer-check", "최대 스텝은?")
-    search_result = runner.context.settings.llm.calls[1][-1].content  # 두 번째 호출에 실린 search_docs 결과
+    search_result = runner.context.config.llm.calls[1][-1].content  # 두 번째 호출에 실린 search_docs 결과
     assert search_result.startswith('<untrusted source="search_docs">')

@@ -8,7 +8,7 @@ from ai_agent_dock.core.llm import LLMRequest, LLMResponse, ToolCall, UserMessag
 from ai_agent_dock.core.llm.tokens import PROVIDER, TIKTOKEN, fill_tokens
 from ai_agent_dock.core.observability import Tracer
 from ai_agent_dock.core.runtime.loop import run_agent
-from ai_agent_dock.core.runtime.types import AgentSettings
+from ai_agent_dock.core.runtime.types import AgentConfig
 from ai_agent_dock.core.session import Session
 from ai_agent_dock.core.tools import BUILTIN_TOOLS
 
@@ -23,9 +23,9 @@ def calc_turn():
 
 def test_one_turn_writes_ordered_lines_with_the_same_trace_id(tmp_path):
     tracer = Tracer(tmp_path)
-    settings = AgentSettings(config=TEST_CONFIG, tools=BUILTIN_TOOLS, llm=FakeLLM(calc_turn()), tracer=tracer)
+    config = AgentConfig(llm_config=TEST_CONFIG, tools=BUILTIN_TOOLS, llm=FakeLLM(calc_turn()), tracer=tracer)
 
-    run_agent(settings, "2+3은?")
+    run_agent(config, "2+3은?")
 
     rows = lines(tracer)
     assert [r["kind"] for r in rows] == ["turn_start", "llm", "tool", "llm", "turn_end"]
@@ -40,7 +40,7 @@ def test_one_turn_writes_ordered_lines_with_the_same_trace_id(tmp_path):
 def test_session_start_is_written_once_per_session(tmp_path):
     tracer = Tracer(tmp_path)
     llm = FakeLLM([final("안녕"), final("또 안녕")])
-    session = Session(AgentSettings(config=TEST_CONFIG, tools=BUILTIN_TOOLS, llm=llm, tracer=tracer))
+    session = Session(AgentConfig(llm_config=TEST_CONFIG, tools=BUILTIN_TOOLS, llm=llm, tracer=tracer))
 
     session.ask("안녕")
     session.ask("또")
@@ -53,14 +53,14 @@ def test_session_start_is_written_once_per_session(tmp_path):
 
 def test_tracing_off_writes_nothing(tmp_path):
     tracer = Tracer(None)  # TRACE_ENABLED=false일 때 chat이 이렇게 만든다
-    run_agent(AgentSettings(config=TEST_CONFIG, tools=BUILTIN_TOOLS, llm=FakeLLM(calc_turn()), tracer=tracer), "2+3은?")
+    run_agent(AgentConfig(llm_config=TEST_CONFIG, tools=BUILTIN_TOOLS, llm=FakeLLM(calc_turn()), tracer=tracer), "2+3은?")
     assert tracer.path is None and list(tmp_path.iterdir()) == []
 
 
 def test_llm_line_carries_tokens_and_their_source(tmp_path):
     tracer = Tracer(tmp_path)
     response = LLMResponse(text="안녕", input_tokens=12, output_tokens=3, input_tokens_source=PROVIDER, output_tokens_source=PROVIDER)
-    run_agent(AgentSettings(config=TEST_CONFIG, llm=FakeLLM([response]), tracer=tracer), "안녕")
+    run_agent(AgentConfig(llm_config=TEST_CONFIG, llm=FakeLLM([response]), tracer=tracer), "안녕")
 
     llm = next(r for r in lines(tracer) if r["kind"] == "llm")
     assert (llm["input_tokens"], llm["output_tokens"], llm["input_tokens_source"]) == (12, 3, PROVIDER)
@@ -81,5 +81,5 @@ def test_missing_values_are_counted_with_tiktoken_and_tagged():
 
 def test_no_trace_file_until_the_first_turn(tmp_path):
     tracer = Tracer(tmp_path)
-    Session(AgentSettings(config=TEST_CONFIG, tools=BUILTIN_TOOLS, llm=FakeLLM([]), tracer=tracer))
+    Session(AgentConfig(llm_config=TEST_CONFIG, tools=BUILTIN_TOOLS, llm=FakeLLM([]), tracer=tracer))
     assert not tracer.path.exists()  # 질문 없이 끝나면 "턴 0" 세션이 남지 않는다(C9 D27).

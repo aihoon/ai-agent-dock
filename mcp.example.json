@@ -17,6 +17,22 @@
       ],
       "trusted": false,
       "enabled": true
+    },
+    "web": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "tavily-mcp@latest"
+      ],
+      "env": {
+        "TAVILY_API_KEY": "${TAVILY_API_KEY}"
+      },
+      "read_only": [
+        "tavily_search",
+        "tavily_extract"
+      ],
+      "trusted": true,
+      "enabled": false
     }
   }
 }

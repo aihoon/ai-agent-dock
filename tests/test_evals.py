@@ -19,7 +19,7 @@ from ai_agent_dock.core.evals import (
 )
 from ai_agent_dock.core.evals.run import CaseResult
 from ai_agent_dock.core.llm import AssistantMessage, Tool, ToolCall, ToolMessage
-from ai_agent_dock.core.runtime.types import AgentResult, AgentSettings
+from ai_agent_dock.core.runtime.types import AgentResult, AgentConfig
 from ai_agent_dock.core.tools import BUILTIN_TOOLS
 
 CASES = Path(__file__).resolve().parent.parent / "evals" / "cases.jsonl"
@@ -94,9 +94,9 @@ def test_denial_wording_in_the_loop_matches_what_the_scorer_skips():
     """루프가 실제로 만드는 거부 관찰이 판정에서 오류로 잡히지 않아야 한다."""
     write = Tool("files__write_file", "쓴다", {"type": "object", "properties": {}}, lambda **kwargs: "기록함")
     llm = FakeLLM([tool_call("c1", "files__write_file"), tool_call("c2", "files__write_file"), final("거부되었습니다")])
-    settings = AgentSettings(config=TEST_CONFIG, tools=[write], llm=llm, approve=scripted_approver({"files__write_file": "deny"}))
+    config = AgentConfig(llm_config=TEST_CONFIG, tools=[write], llm=llm, approve=scripted_approver({"files__write_file": "deny"}))
 
-    outcome = evaluate(case(expect_tools=["files__write_file"], expect_contains=["거부"]), lambda _c: settings)
+    outcome = evaluate(case(expect_tools=["files__write_file"], expect_contains=["거부"]), lambda _c: config)
 
     assert outcome.passed, outcome.failures
 
@@ -111,7 +111,7 @@ def test_regression_is_a_case_that_passed_before_and_fails_now():
 def test_case_file_covers_every_category_and_builtin_tool():
     cases = load_cases(CASES)
     assert len({c.id for c in cases}) == len(cases)  # id는 겹치지 않는다
-    assert {c.category for c in cases} == {"tool", "docs", "approval", "clarify", "skill", "memory", "workflow", "safety"}
+    assert {c.category for c in cases} == {"tool", "docs", "approval", "clarify", "skill", "memory", "workflow", "safety", "subagent"}
     expected = {name for c in cases for name in c.expect_tools}
     builtin = {t.name for t in BUILTIN_TOOLS} | {"ask_user", "search_docs", "load_skill"}
     assert builtin <= expected  # 빌트인 Tool마다 최소 한 케이스
@@ -134,13 +134,13 @@ def test_scripted_input_answers_in_order_then_empty():
 # --- 실행과 저장 ---
 
 
-def calc_settings(_case):
+def calc_config(_case):
     llm = FakeLLM([tool_call("c1", "calculate", expression="17*23"), final("답은 391입니다")])
-    return AgentSettings(config=TEST_CONFIG, tools=BUILTIN_TOOLS, llm=llm)
+    return AgentConfig(llm_config=TEST_CONFIG, tools=BUILTIN_TOOLS, llm=llm)
 
 
 def test_evaluate_runs_the_case_and_counts_passes_over_repeats():
-    outcome = evaluate(case(expect_tools=["calculate"], expect_contains=["391"]), calc_settings, repeat=2)
+    outcome = evaluate(case(expect_tools=["calculate"], expect_contains=["391"]), calc_config, repeat=2)
     assert (outcome.runs, outcome.passes, outcome.passed, outcome.tools) == (2, 2, True, ["calculate"])
 
 

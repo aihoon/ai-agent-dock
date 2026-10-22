@@ -9,7 +9,7 @@ from fakes import TEST_CONFIG, FakeLLM, final, tool_call
 from ai_agent_dock.core.hooks import load_hooks
 from ai_agent_dock.core.llm import Tool, ToolCall
 from ai_agent_dock.core.runtime.loop import HOOK_BLOCKED, run_agent
-from ai_agent_dock.core.runtime.types import AgentSettings
+from ai_agent_dock.core.runtime.types import AgentConfig
 
 SCHEMA = {"type": "object", "properties": {"path": {"type": "string"}}}
 READ = Tool("files__read", "read", SCHEMA, lambda **kw: "원문", read_only=True, trusted=True)
@@ -37,7 +37,7 @@ print(json.dumps(out, ensure_ascii=False))
     records = []
     hooks = load_hooks(path, record=lambda **f: records.append(f))
     llm = FakeLLM([tool_call("c1", "files__read", path="a"), tool_call("c2", "files__read", path="secret"), final("답")])
-    result = run_agent(AgentSettings(config=TEST_CONFIG, tools=[READ], llm=llm, hooks=hooks), "읽어")
+    result = run_agent(AgentConfig(llm_config=TEST_CONFIG, tools=[READ], llm=llm, hooks=hooks), "읽어")
     first, second = (m.content for m in result.history if m.role == "tool")
     assert first == "원문 +hook"
     assert second.startswith(HOOK_BLOCKED) and "읽기 금지" in second
@@ -85,8 +85,8 @@ def test_hooks_and_safety_commands(tmp_path):
 
     (tmp_path / "safety.json").write_text(json.dumps({"tools": {"files__read": {"mode": "ask", "paths": ["*.md"]}}}), encoding="utf-8")
     read = Tool("files__read", "read", SCHEMA, lambda **kw: "", read_only=True, trusted=True, untrusted_output=True)
-    settings, _ = with_safety(AgentSettings(config=TEST_CONFIG, tools=[read]), policy=load_safety_policy(tmp_path / "safety.json"))
-    ctx = CommandContext(session=Session(settings), registry=ToolRegistry(), skills=[], store=SessionStore(tmp_path / "s"),
+    config, _ = with_safety(AgentConfig(llm_config=TEST_CONFIG, tools=[read]), policy=load_safety_policy(tmp_path / "safety.json"))
+    ctx = CommandContext(session=Session(config), registry=ToolRegistry(), skills=[], store=SessionStore(tmp_path / "s"),
                          memory=MemoryStore(tmp_path / "m.md"), make_prompt=lambda: "", summarize=lambda t: "")
 
     def run(line):
@@ -94,7 +94,7 @@ def test_hooks_and_safety_commands(tmp_path):
         return command.run(ctx, arg)
 
     assert "사용자 Hook: 없음" in run("/hooks")
-    settings.hooks = load_hooks(write_hooks(tmp_path, {"before_tool": [entry("files__*")]}, ""))
+    config.hooks = load_hooks(write_hooks(tmp_path, {"before_tool": [entry("files__*")]}, ""))
     assert "before_tool" in run("/hooks") and "files__*" in run("/hooks")
     text = run("/safety")
     assert "항상 켜짐" in text and "감쌀 Tool 1개: files__read" in text and "files__read" in text and "ask, 경로 *.md" in text

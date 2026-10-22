@@ -9,6 +9,14 @@ import re
 from pathlib import Path
 
 NUMBERED = re.compile(r"^\s*\d+\.\s*")
+MEMORY_HEAD = "사용자가 남긴 장기 메모리(세션이 바뀌어도 기억할 사실):"
+
+
+def build_memory_index(items: list[str]) -> str:
+    """시스템 프롬프트에 넣을 메모리 목록. 메모리가 없으면 빈 문자열."""
+    if not items:
+        return ""
+    return MEMORY_HEAD + "\n" + "\n".join(f"- {item}" for item in items)
 
 
 class MemoryStore:

@@ -14,7 +14,7 @@ from ..hitl import Approval
 from ..llm import Message, ToolCall
 from ..orchestration import WAITING, WorkflowRunner
 from ..runtime.loop import run_agent
-from ..runtime.types import AgentResult, AgentSettings
+from ..runtime.types import AgentResult, AgentConfig
 from .score import Case, called_tools, check, check_workflow
 
 
@@ -54,22 +54,25 @@ def scripted_input(answers: list[str]) -> Callable[[str], str]:
 
 def evaluate(
     case: Case,
-    make_settings: Callable[[Case], AgentSettings],
+    make_config: Callable[[Case], AgentConfig],
     repeat: int = 1,
     compactor: Callable[[list[Message]], list[Message]] | None = None,
-    workflows: Callable[[AgentSettings], WorkflowRunner] | None = None,
+    workflows: Callable[[AgentConfig], WorkflowRunner] | None = None,
+    delegated: Callable[[], list[AgentResult]] | None = None,
 ) -> CaseResult:
     """케이스를 repeat번 실행한다. 실행마다 설정을 새로 만든다(미리 적은 답이 실행마다 처음부터 쓰이도록).
 
     setup_turns가 있으면 앞선 턴을 먼저 보내고, compact_before면 마지막 질문 전에 compactor로 이력을 줄인다.
     판정은 마지막 질문의 턴만 본다(앞선 턴의 Tool 호출은 세지 않는다).
     workflow가 있으면 질문을 워크플로로 실행하고, 승인 단계에는 workflow_decisions를 차례로 답한다(C10 D22).
+    delegated는 그동안 맡긴 하위 에이전트의 결과를 꺼내고 비우는 함수다(C12). 마지막 질문의 것만 판정에 쓴다.
     """
+    take = delegated or (lambda: [])
     outcome = CaseResult(id=case.id, category=case.category, runs=repeat, passes=0)
     for _ in range(repeat):
-        settings = make_settings(case)
+        config = make_config(case)
         if case.workflow:
-            failures, outcome.answer = run_workflow_case(case, workflows(settings))
+            failures, outcome.answer = run_workflow_case(case, workflows(config))
             if failures:
                 outcome.failures = failures
             else:
@@ -77,13 +80,15 @@ def evaluate(
             continue
         history: list[Message] = []
         for question in case.setup_turns:
-            history = run_agent(settings, question, history=history).history
+            history = run_agent(config, question, history=history).history
         if case.compact_before and compactor is not None:
             history = compactor(history)
-        full = run_agent(settings, case.question, history=history)
+        take()  # 앞선 턴에서 맡긴 것은 버린다.
+        full = run_agent(config, case.question, history=history)
         result = replace(full, history=full.history[len(history):])
-        failures = check(case, result)
-        outcome.tools = called_tools(result)
+        children = take()
+        failures = check(case, result, children)
+        outcome.tools = called_tools(result) + [name for c in children for name in called_tools(c)]
         outcome.answer = result.answer
         if failures:
             outcome.failures = failures

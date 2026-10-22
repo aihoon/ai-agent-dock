@@ -9,7 +9,7 @@ from fakes import TEST_CONFIG, FakeLLM, final, tool_call
 from ai_agent_dock.core.hitl import Approval, AuditLog, ask_in_terminal, make_ask_user_tool
 from ai_agent_dock.core.llm import Tool, ToolCall
 from ai_agent_dock.core.runtime.loop import run_agent
-from ai_agent_dock.core.runtime.types import AgentSettings
+from ai_agent_dock.core.runtime.types import AgentConfig
 import pytest
 
 from ai_agent_dock.core.tools.mcp import _to_tool
@@ -48,7 +48,7 @@ def _menu(answers):
 
 def test_tool_is_untrusted_by_default_and_mcp_adapter_sets_it_from_config():
     assert Tool("x", "", EMPTY_SCHEMA, lambda: "").trusted is False  # 빠뜨린 툴이 승인 없이 실행되지 않도록 기본은 믿지 않는다
-    untrusted = SimpleNamespace(name="files", call_tool=None, spec=SimpleNamespace(trusted=False))
+    untrusted = SimpleNamespace(name="files", call_tool=None, spec=SimpleNamespace(trusted=False, read_only=[]))
     read = SimpleNamespace(name="read_text_file", description="읽기", title=None, input_schema=EMPTY_SCHEMA, annotations=SimpleNamespace(read_only_hint=True))
     assert _to_tool(untrusted, read).trusted is False
 
@@ -59,8 +59,8 @@ def test_tools_need_approval_unless_declared_read_only():
 
 
 def test_mcp_read_only_hint_and_server_trust_become_the_tools_flags():
-    trusted = SimpleNamespace(name="files", call_tool=None, spec=SimpleNamespace(trusted=True))
-    untrusted = SimpleNamespace(name="files", call_tool=None, spec=SimpleNamespace(trusted=False))
+    trusted = SimpleNamespace(name="files", call_tool=None, spec=SimpleNamespace(trusted=True, read_only=[]))
+    untrusted = SimpleNamespace(name="files", call_tool=None, spec=SimpleNamespace(trusted=False, read_only=[]))
     read = SimpleNamespace(name="read_text_file", description="읽기", title=None, input_schema=EMPTY_SCHEMA, annotations=SimpleNamespace(read_only_hint=True))
     write = SimpleNamespace(name="write_file", description="쓰기", title=None, input_schema=EMPTY_SCHEMA, annotations=SimpleNamespace(read_only_hint=False))
     unknown = SimpleNamespace(name="mystery", description="", title=None, input_schema=EMPTY_SCHEMA, annotations=None)
@@ -78,9 +78,9 @@ def test_auto_run_needs_both_read_only_hint_and_trust():
     asked = []
     read_untrusted = Tool("files__read_text_file", "", EMPTY_SCHEMA, lambda **kwargs: "내용", read_only=True, trusted=False)
     llm = FakeLLM([tool_call("c1", "files__read_text_file"), final("끝")])
-    settings = AgentSettings(config=TEST_CONFIG, tools=[read_untrusted], llm=llm, approve=approver(Approval.approve(), seen=asked))
+    config = AgentConfig(llm_config=TEST_CONFIG, tools=[read_untrusted], llm=llm, approve=approver(Approval.approve(), seen=asked))
 
-    run_agent(settings, "읽어 줘")
+    run_agent(config, "읽어 줘")
 
     assert asked == ["files__read_text_file"]  # 읽기 전용이라도 신뢰하지 않는 서버면 묻는다
 
@@ -89,9 +89,9 @@ def test_trusted_tool_without_read_only_hint_still_asks():
     asked = []
     write_trusted = Tool("files__write_file", "", EMPTY_SCHEMA, lambda **kwargs: "기록함", read_only=False, trusted=True)
     llm = FakeLLM([tool_call("c1", "files__write_file", path="a.md"), final("끝")])
-    settings = AgentSettings(config=TEST_CONFIG, tools=[write_trusted], llm=llm, approve=approver(Approval.approve(), seen=asked))
+    config = AgentConfig(llm_config=TEST_CONFIG, tools=[write_trusted], llm=llm, approve=approver(Approval.approve(), seen=asked))
 
-    run_agent(settings, "써 줘")
+    run_agent(config, "써 줘")
 
     assert asked == ["files__write_file"]  # 신뢰하는 서버라도 쓰기 툴은 묻는다
 
@@ -126,9 +126,9 @@ def test_config_trusted_must_be_true_or_false(tmp_path):
 def test_high_risk_tool_runs_only_after_approval():
     calls, asked = [], []
     llm = FakeLLM([tool_call("c1", "files__write_file", path="a.md", content="x"), final("끝")])
-    settings = AgentSettings(config=TEST_CONFIG, tools=[write_tool(calls)], llm=llm, approve=approver(Approval.approve(), seen=asked))
+    config = AgentConfig(llm_config=TEST_CONFIG, tools=[write_tool(calls)], llm=llm, approve=approver(Approval.approve(), seen=asked))
 
-    result = run_agent(settings, "메모 써 줘")
+    result = run_agent(config, "메모 써 줘")
 
     assert calls == [{"path": "a.md", "content": "x"}]
     assert asked == ["files__write_file"]
@@ -138,9 +138,9 @@ def test_high_risk_tool_runs_only_after_approval():
 def test_denied_tool_does_not_run_and_the_denial_goes_back_to_the_model():
     calls = []
     llm = FakeLLM([tool_call("c1", "files__write_file", path="a.md", content="x"), final("저장하지 않았다")])
-    settings = AgentSettings(config=TEST_CONFIG, tools=[write_tool(calls)], llm=llm, approve=approver(Approval.deny("경로가 틀렸다")))
+    config = AgentConfig(llm_config=TEST_CONFIG, tools=[write_tool(calls)], llm=llm, approve=approver(Approval.deny("경로가 틀렸다")))
 
-    result = run_agent(settings, "메모 써 줘")
+    result = run_agent(config, "메모 써 줘")
 
     assert calls == []
     tool_message = next(m for m in result.history if m.role == "tool")
@@ -155,9 +155,9 @@ def test_same_turn_retry_after_denial_is_blocked_without_asking_again():
         tool_call("c2", "files__write_file", path="a.md", content="y"),  # 같은 턴의 재시도
         final("거부되어 저장하지 않았다"),
     ])
-    settings = AgentSettings(config=TEST_CONFIG, tools=[write_tool(calls)], llm=llm, approve=approver(Approval.deny(), seen=asked))
+    config = AgentConfig(llm_config=TEST_CONFIG, tools=[write_tool(calls)], llm=llm, approve=approver(Approval.deny(), seen=asked))
 
-    result = run_agent(settings, "메모 써 줘")
+    result = run_agent(config, "메모 써 줘")
 
     assert calls == [] and asked == ["files__write_file"]  # 두 번째 호출은 묻지 않고 막힌다
     second = [m for m in result.history if m.role == "tool"][1]
@@ -172,10 +172,10 @@ def test_denial_does_not_carry_over_to_the_next_turn():
         tool_call("c2", "files__write_file", path="a.md", content="y"),
         final("저장했다"),
     ])
-    settings = AgentSettings(config=TEST_CONFIG, tools=[write_tool(calls)], llm=llm, approve=approver(Approval.deny(), Approval.approve(), seen=asked))
+    config = AgentConfig(llm_config=TEST_CONFIG, tools=[write_tool(calls)], llm=llm, approve=approver(Approval.deny(), Approval.approve(), seen=asked))
 
-    first = run_agent(settings, "메모 써 줘")
-    run_agent(settings, "다시 써 줘", history=first.history)
+    first = run_agent(config, "메모 써 줘")
+    run_agent(config, "다시 써 줘", history=first.history)
 
     assert asked == ["files__write_file", "files__write_file"]  # 다음 턴에서는 다시 묻는다
     assert calls == [{"path": "a.md", "content": "y"}]
@@ -184,9 +184,9 @@ def test_denial_does_not_carry_over_to_the_next_turn():
 def test_revise_returns_the_users_request_without_running():
     calls = []
     llm = FakeLLM([tool_call("c1", "files__write_file", path="a.md", content="x"), final("다시 하겠다")])
-    settings = AgentSettings(config=TEST_CONFIG, tools=[write_tool(calls)], llm=llm, approve=approver(Approval.revise("b.md에 써 줘")))
+    config = AgentConfig(llm_config=TEST_CONFIG, tools=[write_tool(calls)], llm=llm, approve=approver(Approval.revise("b.md에 써 줘")))
 
-    result = run_agent(settings, "메모 써 줘")
+    result = run_agent(config, "메모 써 줘")
 
     assert calls == []
     tool_message = next(m for m in result.history if m.role == "tool")
@@ -197,9 +197,9 @@ def test_low_risk_tool_is_never_asked():
     asked = []
     llm = FakeLLM([tool_call("c1", "calculate", expression="1+1"), final("끝")])
     calc = Tool("calculate", "", EMPTY_SCHEMA, lambda **kwargs: "2", read_only=True, trusted=True)
-    settings = AgentSettings(config=TEST_CONFIG, tools=[calc], llm=llm, approve=approver(seen=asked))
+    config = AgentConfig(llm_config=TEST_CONFIG, tools=[calc], llm=llm, approve=approver(seen=asked))
 
-    run_agent(settings, "계산해 줘")
+    run_agent(config, "계산해 줘")
 
     assert asked == []
 
@@ -208,7 +208,7 @@ def test_without_an_approver_high_risk_tools_run_as_before():
     calls = []
     llm = FakeLLM([tool_call("c1", "files__write_file", path="a.md", content="x"), final("끝")])
 
-    run_agent(AgentSettings(config=TEST_CONFIG, tools=[write_tool(calls)], llm=llm), "써 줘")
+    run_agent(AgentConfig(llm_config=TEST_CONFIG, tools=[write_tool(calls)], llm=llm), "써 줘")
 
     assert len(calls) == 1
 
@@ -263,7 +263,7 @@ def test_model_asks_the_user_and_continues_with_the_answer():
     tool = make_ask_user_tool(input_fn=lambda prompt: "b.md")
     llm = FakeLLM([tool_call("c1", "ask_user", question="어느 파일?"), final("b.md에 쓰겠다")])
 
-    result = run_agent(AgentSettings(config=TEST_CONFIG, tools=[tool], llm=llm), "써 줘")
+    result = run_agent(AgentConfig(llm_config=TEST_CONFIG, tools=[tool], llm=llm), "써 줘")
 
     tool_message = next(m for m in result.history if m.role == "tool")
     assert tool_message.content == "b.md"
@@ -283,11 +283,11 @@ def test_audit_log_records_every_execution_with_short_arguments(tmp_path):
         tool_call("c2", "files__write_file", path="a.md", content="가" * 50),
         final("끝"),
     ])
-    settings = AgentSettings(
-        config=TEST_CONFIG, tools=[calc, write_tool(calls)], llm=llm, approve=approver(Approval.deny()), audit=log
+    config = AgentConfig(
+        llm_config=TEST_CONFIG, tools=[calc, write_tool(calls)], llm=llm, approve=approver(Approval.deny()), audit=log
     )
 
-    run_agent(settings, "해 줘")
+    run_agent(config, "해 줘")
 
     lines = [json.loads(line) for line in (tmp_path / "audit.jsonl").read_text(encoding="utf-8").splitlines()]
     assert [(r["tool"], r["decision"]) for r in lines] == [("calculate", "auto"), ("files__write_file", "deny")]
@@ -297,15 +297,15 @@ def test_audit_log_records_every_execution_with_short_arguments(tmp_path):
 
 def test_trusted_time_server_runs_automatically_and_untrusted_files_server_asks(tmp_path):
     """mcp.json에서 시간 서버는 trusted: true, 파일 서버는 trusted: false일 때 자동 실행과 승인이 갈린다."""
-    config = tmp_path / "mcp.json"
-    config.write_text(
+    config_path = tmp_path / "mcp.json"
+    config_path.write_text(
         json.dumps({"servers": {
             "time": {"command": "uvx", "args": ["mcp-server-time"], "trusted": True},
             "files": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "sandbox"], "trusted": False},
         }}),
         encoding="utf-8",
     )
-    specs = load_config(config)
+    specs = load_config(config_path)
     time_def = SimpleNamespace(name="get_current_time", description="현재 시각", title=None, input_schema=EMPTY_SCHEMA, annotations=SimpleNamespace(read_only_hint=True))
     read_def = SimpleNamespace(name="read_text_file", description="파일 읽기", title=None, input_schema=EMPTY_SCHEMA, annotations=SimpleNamespace(read_only_hint=True))
     time_tool = _to_tool(SimpleNamespace(name="time", call_tool=None, spec=specs["time"]), time_def)
@@ -319,9 +319,9 @@ def test_trusted_time_server_runs_automatically_and_untrusted_files_server_asks(
         tool_call("c2", "files__read_text_file", path="a.md"),
         final("끝"),
     ])
-    settings = AgentSettings(config=TEST_CONFIG, tools=[time_tool, files_tool], llm=llm, approve=approver(Approval.approve(), seen=asked))
+    config = AgentConfig(llm_config=TEST_CONFIG, tools=[time_tool, files_tool], llm=llm, approve=approver(Approval.approve(), seen=asked))
 
-    run_agent(settings, "시각과 파일을 알려 줘")
+    run_agent(config, "시각과 파일을 알려 줘")
 
     assert ran == ["time", "files"]  # 둘 다 실행되지만
     assert asked == ["files__read_text_file"]  # 승인을 받은 것은 신뢰하지 않는 파일 서버뿐이다
@@ -329,13 +329,13 @@ def test_trusted_time_server_runs_automatically_and_untrusted_files_server_asks(
 
 
 def test_disabled_server_is_left_out_of_the_table_but_the_rest_still_load(tmp_path):
-    config = tmp_path / "mcp.json"
-    config.write_text(
+    config_path = tmp_path / "mcp.json"
+    config_path.write_text(
         json.dumps({"servers": {"time": {"command": "uvx", "enabled": False}, "files": {"command": "npx"}}}),
         encoding="utf-8",
     )
 
-    assert list(load_config(config)) == ["files"]
+    assert list(load_config(config_path)) == ["files"]
 
 
 def test_enabled_must_be_true_or_false(tmp_path):

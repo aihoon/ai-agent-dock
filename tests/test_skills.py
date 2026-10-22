@@ -6,12 +6,12 @@ import pytest
 from fakes import TEST_CONFIG, FakeLLM, final
 
 from ai_agent_dock.core.llm import LLMResponse, ToolCall
-from ai_agent_dock.core.runtime.types import AgentSettings
+from ai_agent_dock.core.runtime.types import AgentConfig
 from ai_agent_dock.core.session import Session
 from ai_agent_dock.core.skills import (
     SkillFormatError,
     SkillNotFoundError,
-    build_index,
+    build_skill_index,
     make_load_skill_tool,
     read_skill,
     scan_skills,
@@ -79,13 +79,13 @@ def test_name_must_match_folder(tmp_path):
 
 
 def test_index_is_empty_without_skills():
-    assert build_index([]) == ""
+    assert build_skill_index([]) == ""
 
 
 def test_index_lists_name_and_description_without_body(tmp_path):
     write_skill(tmp_path, "debug-checklist", skill_text(body="비밀 본문"))
 
-    index = build_index(scan_skills(tmp_path))
+    index = build_skill_index(scan_skills(tmp_path))
 
     assert "debug-checklist: 버그를 좁혀 찾는 절차" in index
     assert "비밀 본문" not in index
@@ -137,7 +137,7 @@ def test_model_loads_skill_through_the_loop(tmp_path):
     registry.add(make_load_skill_tool(scan_skills(tmp_path)), source="skills")
     request = LLMResponse(text=None, tool_calls=[ToolCall(id="c1", name="load_skill", arguments={"name": "debug-checklist"})])
     llm = FakeLLM([request, final("끝")])
-    session = Session(AgentSettings(config=TEST_CONFIG, tools=registry.tools(), llm=llm))
+    session = Session(AgentConfig(llm_config=TEST_CONFIG, tools=registry.tools(), llm=llm))
 
     result = session.ask("오류를 찾아 줘")
 
@@ -148,7 +148,7 @@ def test_model_loads_skill_through_the_loop(tmp_path):
 
 def test_add_user_message_does_not_call_the_model():
     llm = FakeLLM([])  # 호출되면 AssertionError가 난다.
-    session = Session(AgentSettings(config=TEST_CONFIG, llm=llm))
+    session = Session(AgentConfig(llm_config=TEST_CONFIG, llm=llm))
 
     session.add_user_message("지침")
 

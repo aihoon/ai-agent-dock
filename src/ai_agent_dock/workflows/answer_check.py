@@ -16,7 +16,9 @@ from ..core.orchestration import Workflow, WorkflowContext, ask_agent
 from ..core.retrieval import check_citations, make_search_docs_tool
 
 NO_EVIDENCE = "관련 문서에서 근거를 찾지 못했습니다."
-EXCLUDED_TOOLS = {"ask_user"}  # 되묻기는 노드 안에서 일어나 체크포인트에 남지 않는다. 방향은 승인 단계의 다르게 요청으로 바꾼다(C10 D23).
+# 되묻기는 노드 안에서 일어나 체크포인트에 남지 않는다. 방향은 승인 단계의 다르게 요청으로 바꾼다(C10 D23).
+# 맡기기(delegate, C12)도 뺀다. 맡은 에이전트의 검색은 이 노드의 출처 집합(seen)에 남지 않아 출처 검사가 틀어진다.
+EXCLUDED_TOOLS = {"ask_user", "delegate"}
 
 
 class State(TypedDict, total=False):
@@ -61,8 +63,8 @@ def build(ctx: WorkflowContext) -> StateGraph:
         ctx.progress(f"답 다시 작성 (고칠 점: {feedback[-1]})" if feedback else "답 작성")
         seen: set[str] = set()
         search = make_search_docs_tool(ctx.knowledge.store, seen)
-        tools = [t for t in ctx.settings.tools if t.name not in EXCLUDED_TOOLS | {search.name}] + [search]
-        draft = ask_agent(replace(ctx.settings, tools=tools), prompt_for(state))
+        tools = [t for t in ctx.config.tools if t.name not in EXCLUDED_TOOLS | {search.name}] + [search]
+        draft = ask_agent(replace(ctx.config, tools=tools), prompt_for(state))
         return {"draft": draft, "seen": sorted(seen)}
 
     def check(state: State) -> State:

@@ -12,13 +12,14 @@ scenario error/loop는 미리 정한 응답을 쓰는 가짜 모델이라 API �
 import argparse
 import logging
 from dataclasses import replace
+from pathlib import Path
 
 from dotenv import load_dotenv
 
+from ai_agent_dock.core.agents import MAIN, build_system_prompt, load_agents
 from ai_agent_dock.core.llm import LLMConfig, LLMResponse, Message, Tool, ToolCall, call_llm, config_from_env
 from ai_agent_dock.core.runtime.loop import run_agent
-from ai_agent_dock.core.runtime.prompt import build_system_prompt
-from ai_agent_dock.core.runtime.types import AgentSettings
+from ai_agent_dock.core.runtime.types import AgentConfig
 from ai_agent_dock.core.tools import BUILTIN_TOOLS
 
 SHOW = 200  # 긴 내용은 이만큼만 보여 준다.
@@ -137,19 +138,20 @@ def main():
 
     if args.scenario:
         question, model, scenario_steps = SCENARIOS[args.scenario]
-        config = LLMConfig(provider="scenario", model="scenario", max_output_tokens=None)  # 가짜 모델은 설정을 읽지 않는다.
+        llm_config = LLMConfig(provider="scenario", model="scenario", max_output_tokens=None)  # 가짜 모델은 설정을 읽지 않는다.
         mode = f"가짜 모델(시나리오: {args.scenario})"
     else:
         question = " ".join(args.question) or "지금 몇 시야? 그리고 17*23은 얼마야? 두 결과를 한 문장으로 말해 줘."
         model, scenario_steps = call_llm, None
-        config = config_from_env()
+        llm_config = config_from_env()
         mode = "실제 모델(.env의 LLM_PROVIDER)"
     max_steps = args.max_steps or scenario_steps
 
     tracer = Tracer(model)
     tools = [tracer.wrap_tool(t) for t in BUILTIN_TOOLS]
 
-    system_prompt = build_system_prompt()
+    main_agent = load_agents(Path(__file__).resolve().parent.parent / "agents")[MAIN]  # 기본 지침은 agents/main/AGENT.md 본문(C12)
+    system_prompt = build_system_prompt(main_agent.body, tools)
     banner("시작")
     print(f"모드      : {mode}")
     print(f"질문      : {question}")
@@ -157,8 +159,8 @@ def main():
     print(f"Tool      : {', '.join(t.name for t in tools)}")
     print(f"최대 스텝 : {max_steps or '(.env의 AGENT_MAX_STEPS 또는 기본 10)'}")
 
-    settings = AgentSettings(config=config, tools=tools, system_prompt=system_prompt, max_steps=max_steps, llm=tracer.llm)
-    result = run_agent(settings, question)
+    config = AgentConfig(llm_config=llm_config, tools=tools, system_prompt=system_prompt, max_steps=max_steps, llm=tracer.llm)
+    result = run_agent(config, question)
 
     banner("결과")
     print(f"종료 사유 : {result.status}  ({'최종 답변으로 종료' if result.status == 'completed' else '최대 스텝에 도달해 강제 종료'})")

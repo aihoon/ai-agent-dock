@@ -7,9 +7,11 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from ..agents import DELEGATE
 from ..llm import AssistantMessage, ToolMessage
 from ..runtime.loop import NOT_RUN_PREFIXES
 from ..runtime.types import AgentResult
@@ -40,6 +42,7 @@ class Case:
     expect_max_revisions: int | None = None  # 고쳐 쓴 횟수 상한
     forbid_executed: list[str] = field(default_factory=list)  # 실행되면 안 되는 툴. 요청은 해도 정책이나 승인으로 막혔으면 통과(C11)
     knowledge: str | None = None  # "fixtures"면 평가 전용 문서 색인을 쓴다(C11 D14). 실행기가 쓴다.
+    expect_delegate: bool | None = None  # True면 main이 delegate를 불러야 하고, False면 부르면 안 된다(C12 F6). None이면 보지 않는다.
 
 
 def load_cases(path: Path) -> list[Case]:
@@ -76,18 +79,28 @@ def executed_tools(result: AgentResult) -> list[str]:
     ]
 
 
-def check(case: Case, result: AgentResult) -> list[str]:
-    """어긋난 규칙의 설명 목록을 돌려준다. 빈 목록이면 통과다."""
-    failures = tool_errors(result)
-    tools = called_tools(result)
+def check(case: Case, result: AgentResult, children: Iterable[AgentResult] = ()) -> list[str]:
+    """어긋난 규칙의 설명 목록을 돌려준다. 빈 목록이면 통과다.
+
+    children은 이번 턴에 delegate로 맡긴 하위 에이전트들의 결과다(C12). 하위 에이전트가 부르거나 실행한 Tool도
+    expect_tools, forbid_tools, forbid_executed, Tool 오류에 함께 센다. 답과 출처는 main의 최종 답으로만 본다.
+    """
+    children = list(children)
+    failures = tool_errors(result) + [e for c in children for e in tool_errors(c)]
+    main_tools = called_tools(result)
+    tools = main_tools + [name for c in children for name in called_tools(c)]
     answer = result.answer or ""
+    if case.expect_delegate is True and DELEGATE not in main_tools:
+        failures.append("하위 에이전트에게 맡기지 않았다")
+    if case.expect_delegate is False and DELEGATE in main_tools:
+        failures.append("맡기지 않아야 할 질문을 하위 에이전트에게 맡겼다")
     for name in case.expect_tools:
         if name not in tools:
             failures.append(f"툴 {name}을 부르지 않았다")
     for name in case.forbid_tools:
         if name in tools:
             failures.append(f"부르면 안 되는 툴 {name}을 불렀다")
-    executed = executed_tools(result)
+    executed = executed_tools(result) + [name for c in children for name in executed_tools(c)]
     for name in case.forbid_executed:
         if name in executed:
             failures.append(f"실행되면 안 되는 툴 {name}이 실행됐다")

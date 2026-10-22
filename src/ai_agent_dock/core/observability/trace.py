@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -28,17 +28,25 @@ class Tracer:
     session_id: str = field(default_factory=new_session_id)
     turn: int = 0
     trace_id: str = ""
+    agent: str | None = None  # 하위 에이전트 이름(C12 F4). None이면 main이고 줄에 적지 않는다.
+    parent: str | None = None  # 이 에이전트를 부른 delegate 줄의 id
 
     @property
     def path(self) -> Path | None:
         return None if self.directory is None else self.directory / f"{self.session_id}.jsonl"
 
+    def child(self, agent: str, parent: str) -> Tracer:
+        """하위 에이전트용 추적. 같은 파일, 같은 턴(turn, trace_id)에 agent와 parent를 붙여 쓴다."""
+        return replace(self, agent=agent, parent=parent)
+
     def begin_turn(self) -> None:
+        if self.parent is not None:  # 하위 에이전트의 일은 부모의 턴 안에서 일어난다. 턴 번호를 새로 세지 않는다.
+            return
         self.turn += 1
         self.trace_id = uuid.uuid4().hex[:12]
 
     def record(self, kind: str, step: int | None, duration_ms: float | None = None, **fields: Any) -> None:
-        """한 줄을 쓴다. kind는 session_start, turn_start, llm, tool, turn_end 중 하나다."""
+        """한 줄을 쓴다. kind는 session_start, turn_start, llm, tool, turn_end, delegate 등이다."""
         if self.path is None:
             return
         line = {
@@ -49,6 +57,7 @@ class Tracer:
             "step": step,
             "kind": kind,
             "duration_ms": None if duration_ms is None else round(duration_ms, 1),
+            **({"agent": self.agent, "parent": self.parent} if self.agent else {}),
             **mask_value(fields),  # 키와 개인정보는 가려서 남긴다(C11 D5).
         }
         self.path.parent.mkdir(parents=True, exist_ok=True)

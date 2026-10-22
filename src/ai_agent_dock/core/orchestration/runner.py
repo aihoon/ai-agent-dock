@@ -18,7 +18,7 @@ from langgraph.types import Command
 from ..observability import new_session_id
 from ..retrieval import Knowledge
 from ..runtime.loop import run_agent
-from ..runtime.types import AgentSettings
+from ..runtime.types import AgentConfig
 
 WAITING = "waiting"  # 사람 승인에서 멈춘 상태. 나머지 상태(approved, rejected, no_evidence)는 워크플로가 정한다.
 SHOW = 200  # 추적 기록에 노드 결과를 이만큼만 남긴다(전체 답은 에이전트의 llm 줄에 있다).
@@ -28,7 +28,7 @@ SHOW = 200  # 추적 기록에 노드 결과를 이만큼만 남긴다(전체 �
 class WorkflowContext:
     """워크플로가 노드 안에서 쓰는 것. 채팅과 같은 에이전트 설정(시스템 프롬프트, Tool, 모델)을 쓴다(C10 D13)."""
 
-    settings: AgentSettings
+    config: AgentConfig
     knowledge: Knowledge | None = None
     max_revisions: int = 2  # WORKFLOW_MAX_REVISIONS(C10 D8)
     progress: Callable[[str], None] = lambda message: None  # 노드가 알리는 진행 줄(C10 D24). 응용이 화면에 보여 준다.
@@ -56,9 +56,9 @@ class Outcome:
     started: str = ""
 
 
-def ask_agent(settings: AgentSettings, prompt: str) -> str:
+def ask_agent(config: AgentConfig, prompt: str) -> str:
     """에이전트 노드: 독(run_agent)을 새 이력으로 한 번 부르고 답만 돌려준다. 채팅 이력은 보지 않는다(C10 D13)."""
-    return run_agent(settings, prompt).answer or ""
+    return run_agent(config, prompt).answer or ""
 
 
 class WorkflowRunner:
@@ -74,7 +74,7 @@ class WorkflowRunner:
         return self._apps[name]
 
     def _record(self, kind: str, **fields) -> None:
-        tracer = self.context.settings.tracer
+        tracer = self.context.config.tracer
         if tracer is not None:
             tracer.record(kind, None, **fields)
 

@@ -15,7 +15,7 @@ from ai_agent_dock.env import env_int
 
 from ..llm import AssistantMessage, LLMRequest, Message, Tool, ToolCall, ToolMessage, UserMessage
 from ..observability import Tracer
-from .types import AgentResult, AgentSettings, Usage
+from .types import AgentResult, AgentConfig, Usage
 
 log = logging.getLogger(__name__)
 
@@ -30,23 +30,23 @@ HOOK_BLOCKED = "Hook이 막았다:"  # 사용자 Hook이 막았다(C11 D20)
 NOT_RUN_PREFIXES = (BLOCKED, DENIED, REVISED, SAFETY_BLOCKED, HOOK_BLOCKED)
 
 
-def run_agent(settings: AgentSettings, question: str, *, history: list[Message] | None = None) -> AgentResult:
-    """턴 하나(질문 하나)를 처리한다. settings.max_steps는 모델을 호출하는 횟수의 상한이다.
+def run_agent(config: AgentConfig, question: str, *, history: list[Message] | None = None) -> AgentResult:
+    """턴 하나(질문 하나)를 처리한다. config.max_steps는 모델을 호출하는 횟수의 상한이다.
 
     settings는 세션 내내 같은 설정이고, 모든 스텝의 요청에 그대로 실린다. history는 이전 턴들의 이력이다.
     넘긴 목록은 바꾸지 않고 복사해서 쓰며, 이번 턴이 반영된 전체 이력을 결과(AgentResult.history)로 돌려준다.
     생략하면 빈 이력으로 시작한다(이전 턴을 기억하지 않는다).
 
-    max_steps 우선순위: settings.max_steps > 환경 변수 AGENT_MAX_STEPS > 기본값 10.
+    max_steps 우선순위: config.max_steps > 환경 변수 AGENT_MAX_STEPS > 기본값 10.
     """
-    max_steps = settings.max_steps
+    max_steps = config.max_steps
     if max_steps is None:
         max_steps = env_int("AGENT_MAX_STEPS", DEFAULT_MAX_STEPS)
-    tools_by_name = {t.name: t for t in settings.tools}
+    tools_by_name = {t.name: t for t in config.tools}
     history = [*(history or []), UserMessage(content=question)]
     answer: str | None = None
     denied: set[str] = set()  # 이번 턴에서 사용자가 거부한 Tool 이름. 같은 턴에서는 다시 묻지 않는다.
-    tracer = settings.tracer
+    tracer = config.tracer
     usage = Usage()  # 이번 턴의 토큰 합계(한 턴에 LLM 호출이 여러 번이면 더한다)
     turn_started = time.perf_counter()
     if tracer is not None:
@@ -55,8 +55,8 @@ def run_agent(settings: AgentSettings, question: str, *, history: list[Message] 
 
     for step in range(1, max_steps + 1):
         started = time.perf_counter()
-        response = settings.llm(
-            LLMRequest(config=settings.config, messages=history, tools=settings.tools, system_prompt=settings.system_prompt)
+        response = config.llm(
+            LLMRequest(config=config.llm_config, messages=history, tools=config.tools, system_prompt=config.system_prompt)
         )
         if tracer is not None:
             tracer.record(
@@ -79,7 +79,7 @@ def run_agent(settings: AgentSettings, question: str, *, history: list[Message] 
         answer = response.text
 
         if not response.tool_calls:
-            filtered = _filter_answer(settings, answer)
+            filtered = _filter_answer(config, answer)
             if filtered != answer:  # 바뀐 답(예: 키를 가림)을 이력에 둔다. 원본이 남은 raw는 버린다.
                 answer = filtered
                 history[-1] = AssistantMessage(content=answer)
@@ -88,7 +88,7 @@ def run_agent(settings: AgentSettings, question: str, *, history: list[Message] 
 
         for call in response.tool_calls:
             started = time.perf_counter()
-            content, is_error = _run_call(settings, tools_by_name, call, denied)
+            content, is_error = _run_call(config, tools_by_name, call, denied)
             if tracer is not None:
                 tracer.record(
                     "tool",
@@ -118,7 +118,7 @@ def _finish(tracer: Tracer | None, turn_started: float, result: AgentResult) -> 
 
 
 def _run_call(
-    settings: AgentSettings, tools_by_name: dict[str, Tool], call: ToolCall, denied: set[str]
+    config: AgentConfig, tools_by_name: dict[str, Tool], call: ToolCall, denied: set[str]
 ) -> tuple[str, bool]:
     """Tool 하나를 실행하기 전에, 읽기 전용이 아니면 승인을 받는다. 거부하면 실행하지 않고 그 사실을 관찰로 돌려준다.
 
@@ -127,15 +127,15 @@ def _run_call(
     tool = tools_by_name.get(call.name)
     needs_approval = tool is not None and not (tool.read_only and tool.trusted)
     decision = "auto"
-    blocked = _check_before(settings, call, tool)
+    blocked = _check_before(config, call, tool)
     if blocked:  # Safety나 Hook이 막으면 승인을 묻지도 실행하지도 않는다(C11 D22).
         decision, prefix, reason = blocked
         content, is_error = f"{prefix} {reason} 같은 요청을 다시 하지 말고 막힌 사실을 사용자에게 알려라.", True
     elif needs_approval and call.name in denied:
         decision = "blocked"
         content, is_error = f"{BLOCKED} {call.name} 실행을 이미 거부했다. 같은 요청을 다시 하지 말고 거부된 사실을 사용자에게 알려라.", True
-    elif settings.approve is not None and needs_approval:
-        approval = settings.approve(call)
+    elif config.approve is not None and needs_approval:
+        approval = config.approve(call)
         decision = approval.kind
         if approval.kind == "deny":
             denied.add(call.name)
@@ -148,12 +148,12 @@ def _run_call(
     else:
         content, is_error = _execute(tools_by_name, call)
     if decision in ("auto", "approve") and tool is not None:  # Hook 다음 Safety가 마지막(C11 D22)
-        for hook in settings.hooks.after_tool:
+        for hook in config.hooks.after_tool:
             content = hook(call, tool, content)
-        if settings.safety is not None:
-            content = settings.safety.after_tool(call, tool, content)
-    if settings.audit is not None:
-        settings.audit.record(
+        if config.safety is not None:
+            content = config.safety.after_tool(call, tool, content)
+    if config.audit is not None:
+        config.audit.record(
             tool=call.name,
             risk="high" if needs_approval else "low",
             decision=decision,
@@ -164,28 +164,28 @@ def _run_call(
     return content, is_error
 
 
-def _check_before(settings: AgentSettings, call: ToolCall, tool: Tool | None) -> tuple[str, str, str] | None:
+def _check_before(config: AgentConfig, call: ToolCall, tool: Tool | None) -> tuple[str, str, str] | None:
     """Safety를 먼저, 그다음 Hook을 차례로 부른다. 막으면 (감사 로그 결정, 관찰 머리말, 이유)를 돌려준다."""
     if tool is None:
         return None
-    if settings.safety is not None:
-        reason = settings.safety.before_tool(call, tool)
+    if config.safety is not None:
+        reason = config.safety.before_tool(call, tool)
         if reason:
             return "safety_block", SAFETY_BLOCKED, reason
-    for hook in settings.hooks.before_tool:
+    for hook in config.hooks.before_tool:
         reason = hook(call, tool)
         if reason:
             return "hook_block", HOOK_BLOCKED, reason
     return None
 
 
-def _filter_answer(settings: AgentSettings, answer: str | None) -> str | None:
+def _filter_answer(config: AgentConfig, answer: str | None) -> str | None:
     if answer is None:
         return None
-    for hook in settings.hooks.after_answer:
+    for hook in config.hooks.after_answer:
         answer = hook(answer)
-    if settings.safety is not None:  # Safety가 마지막이라 Hook이 답을 바꿔도 키 가리기가 빠지지 않는다.
-        answer = settings.safety.after_answer(answer)
+    if config.safety is not None:  # Safety가 마지막이라 Hook이 답을 바꿔도 키 가리기가 빠지지 않는다.
+        answer = config.safety.after_answer(answer)
     return answer
 
 

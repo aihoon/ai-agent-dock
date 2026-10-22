@@ -23,6 +23,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from langgraph.checkpoint.sqlite import SqliteSaver
 
+from ai_agent_dock.core.agents import MAIN, AgentTeam, load_agents
 from ai_agent_dock.core.commands import CommandContext, find_command, help_text
 from ai_agent_dock.core.hitl import AuditLog, ask_in_terminal
 from ai_agent_dock.core.llm import LLMRequest, Tool, UserMessage, call_llm, config_from_env
@@ -30,8 +31,7 @@ from ai_agent_dock.core.memory import MemoryStore
 from ai_agent_dock.core.observability import Tracer
 from ai_agent_dock.core.orchestration import WorkflowContext, WorkflowRunner
 from ai_agent_dock.core.retrieval import Knowledge, check_citations, open_knowledge
-from ai_agent_dock.core.runtime.prompt import build_system_prompt
-from ai_agent_dock.core.runtime.types import AgentSettings
+from ai_agent_dock.core.runtime.types import AgentResult, AgentConfig
 from ai_agent_dock.core.hooks import load_hooks
 from ai_agent_dock.core.safety import Safety, load_safety_policy, with_safety
 from ai_agent_dock.core.session import Session
@@ -52,6 +52,8 @@ CHECKPOINT_PATH = Path(__file__).resolve().parent.parent / "data" / "checkpoints
 SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"  # 프로젝트 루트의 skills/
 KNOWLEDGE_DIR = Path(__file__).resolve().parent.parent / "knowledge"  # 프로젝트 루트의 knowledge/(검색할 문서)
 INDEX_PATH = Path(__file__).resolve().parent.parent / "data" / "index.sqlite"  # 문서 색인(문서에서 다시 만들 수 있다). data/는 git에서 제외한다.
+AGENTS_DIR = Path(__file__).resolve().parent.parent / "agents"  # 에이전트 정의(C12). .env의 AGENTS_DIR로 바꿀 수 있다.
+TASK_PREVIEW = 50  # 위임 진행 줄에 보여 줄 task 글자 수
 
 
 class Progress:
@@ -63,6 +65,8 @@ class Progress:
     def __init__(self):
         self.step = 0
         self.open = False  # 글자 조각을 출력하다 줄바꿈을 아직 못 한 상태
+        self.indent = ""  # 하위 에이전트의 진행 줄은 들여 쓴다(C12 F5).
+        self.outer_steps: list[int] = []  # 맡기기 전 부모의 스텝 번호
 
     def begin_turn(self):
         self.step = 0
@@ -79,7 +83,20 @@ class Progress:
 
     def _say(self, message: str):
         self.end_line()
-        print(message, flush=True)
+        print(self.indent + message, flush=True)
+
+    def delegate_start(self, name: str, task: str):
+        """하위 에이전트에게 맡길 때(C12 F5). 하위 에이전트의 스텝은 1부터 새로 센다."""
+        preview = task.replace("\n", " ")
+        self._say(f"  → {name}에게 맡김: {preview[:TASK_PREVIEW]}{'…' if len(preview) > TASK_PREVIEW else ''}")
+        self.outer_steps.append(self.step)
+        self.step = 0
+        self.indent += "    "
+
+    def delegate_end(self, name: str, result: AgentResult):
+        self.indent = self.indent[:-4]
+        self.step = self.outer_steps.pop()
+        self._say(f"  ← {name} 완료 (스텝 {result.steps}{', 스텝 상한에 걸림' if result.status == 'max_steps' else ''})")
 
     def say(self, message: str):
         self._say(message)
@@ -129,7 +146,7 @@ def main():
     try:
         # 우선순위: 인자 > 환경 변수 AGENT_STREAM > 기본값(스트리밍)
         stream = args.stream if args.stream is not None else env_bool("AGENT_STREAM", True)
-        config = config_from_env(args.provider)  # 모델 설정은 시작할 때 한 번 만든다.
+        llm_config = config_from_env(args.provider)  # 모델 설정은 시작할 때 한 번 만든다.
     except ValueError as e:
         raise SystemExit(f"설정 오류: {e}")
 
@@ -138,8 +155,18 @@ def main():
     with ExitStack() as stack:  # MCP 서버 연결은 프로그램이 끝날 때 이 with가 정리한다.
         try:
             skills = scan_skills(SKILLS_DIR)
-        except ValueError as e:  # 스킬 형식 오류 등
+            team = AgentTeam(  # 에이전트 정의(AGENT.md)와 위임 규칙(C12)
+                load_agents(Path(env_str("AGENTS_DIR", str(AGENTS_DIR)))),
+                max_depth=env_int("SUBAGENT_MAX_DEPTH", 1),
+                max_steps=env_int("SUBAGENT_MAX_STEPS", 6),
+                max_result_chars=env_int("TOOL_RESULT_MAX_CHARS", DEFAULT_MAX_RESULT_CHARS),
+                approve_for=lambda name: lambda call: ask_in_terminal(call, interactive=sys.stdin.isatty(), notice=safety.notice(), agent=name),
+                on_start=progress.delegate_start,
+                on_end=progress.delegate_end,
+            )
+        except ValueError as e:  # 스킬이나 에이전트 정의의 형식 오류 등
             raise SystemExit(f"설정 오류: {e}")
+        print(f"에이전트 {len(team.agents)}개: {', '.join(team.agents)} (맡기기 깊이 상한 {team.max_depth})")
         if skills:
             print(f"스킬 {len(skills)}개를 찾았습니다.")
         knowledge = None
@@ -153,19 +180,20 @@ def main():
             print("문서 색인이 없습니다. uv run python scripts/index_knowledge.py 를 먼저 실행하세요.")
         try:
             registry = build_registry(args, stack, skills=skills, knowledge=knowledge)
-        except ValueError as e:  # 설정 파일 오류, Tool 이름 겹침 등
+            for warning in team.check(registry.tools()):  # 하위 에이전트에 쓰기 Tool이 있으면 시작하지 않는다(C12 D2).
+                print(f"⚠ {warning}")
+        except ValueError as e:  # 설정 파일 오류, Tool 이름 겹침, 하위 에이전트의 쓰기 Tool 등
             raise SystemExit(f"설정 오류: {e}")
         audit = AuditLog(AUDIT_PATH)
         memory = MemoryStore(MEMORY_PATH)
 
         def make_prompt() -> str:  # 메모리가 바뀌면 다시 조립한다(다음 턴부터 반영, C9 D20).
-            return build_system_prompt(skills=skills, cite_docs=knowledge is not None, memory=memory.items())
+            return team.config_for(MAIN, config, skills=skills, memory=memory.items()).system_prompt
 
-        system_prompt = make_prompt()
-        settings = AgentSettings(
-            config=config,
+        # 모든 에이전트가 함께 쓰는 설정. main과 하위 에이전트는 여기서 각자 Tool을 골라 쓴다(C12).
+        config = AgentConfig(
+            llm_config=llm_config,
             tools=[progress.wrap_tool(t) for t in registry.tools()],
-            system_prompt=system_prompt,
             max_steps=args.max_steps,
             llm=llm,
             approve=lambda call: ask_in_terminal(call, interactive=sys.stdin.isatty(), notice=safety.notice()),
@@ -178,7 +206,7 @@ def main():
                 print(f"⚠ 안전 정책 파일이 없어 정책 없이 시작합니다: {policy_path} (safety.example.json을 복사하세요)")
                 policy_path = ""
             policy = load_safety_policy(policy_path) if policy_path else None
-            settings, safety = with_safety(settings, policy=policy, on_block=progress.blocked)
+            config, safety = with_safety(config, policy=policy, on_block=progress.blocked)
         except (OSError, ValueError) as e:
             raise SystemExit(f"안전 정책 설정 오류: {e}")
         if policy:
@@ -189,16 +217,16 @@ def main():
             hooks_path = ""
         if hooks_path:  # 사용자가 설치한 Hook(C11 D20)
             try:
-                settings.hooks = load_hooks(
+                config.hooks = load_hooks(
                     hooks_path,
                     timeout=env_float("HOOK_TIMEOUT", 10.0),
-                    record=lambda **fields: settings.tracer.record("hook", None, **fields),
+                    record=lambda **fields: config.tracer.record("hook", None, **fields),
                     warn=progress.say,
                 )
             except (OSError, ValueError) as e:
                 raise SystemExit(f"Hook 설정 오류: {e}")
-            print(f"Hook {len(settings.hooks.specs)}개를 설치했습니다({hooks_path}).")
-        session = Session(settings)
+            print(f"Hook {len(config.hooks.specs)}개를 설치했습니다({hooks_path}).")
+        session = Session(team.config_for(MAIN, config, skills=skills, memory=memory.items()))
         ctx = CommandContext(
             session=session,
             registry=registry,
@@ -206,12 +234,13 @@ def main():
             store=SessionStore(SESSIONS_DIR),
             memory=memory,
             make_prompt=make_prompt,
-            summarize=make_summarizer(config),
+            summarize=make_summarizer(llm_config),
             knowledge=knowledge,
             keep_turns=env_int("COMPACT_KEEP_TURNS", 4),
             compact_warn_tokens=env_int("COMPACT_WARN_TOKENS", 100_000),
             memory_warn_tokens=env_int("MEMORY_WARN_TOKENS", 2_000),
-            workflows=make_workflows(stack, settings, knowledge, progress.workflow_step),
+            workflows=make_workflows(stack, session.config, knowledge, progress.workflow_step),
+            agents=team,
         )
         repl(session, ctx, progress, stream, safety)
 
@@ -241,13 +270,13 @@ def build_registry(args, stack: ExitStack, *, skills: list[SkillMeta], knowledge
     return registry
 
 
-def make_workflows(stack: ExitStack, settings: AgentSettings, knowledge: Knowledge | None, progress) -> WorkflowRunner:
+def make_workflows(stack: ExitStack, config: AgentConfig, knowledge: Knowledge | None, progress) -> WorkflowRunner:
     """워크플로 실행기. 체크포인트는 data/checkpoints.sqlite에 저장한다(서비스에서는 C12에서 Postgres로 바꾼다)."""
     CHECKPOINT_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(CHECKPOINT_PATH, check_same_thread=False)
     stack.callback(conn.close)
     max_revisions = env_int("WORKFLOW_MAX_REVISIONS", 2)
-    context = WorkflowContext(settings=settings, knowledge=knowledge, max_revisions=max_revisions, progress=progress)
+    context = WorkflowContext(config=config, knowledge=knowledge, max_revisions=max_revisions, progress=progress)
     return WorkflowRunner(WORKFLOWS, context, SqliteSaver(conn))
 
 
@@ -291,7 +320,7 @@ def report_citations(answer: str | None, seen: set[str], searched: bool) -> None
 
 
 def repl(session: Session, ctx: CommandContext, progress: Progress, stream: bool, safety: Safety) -> None:
-    knowledge, audit = ctx.knowledge, session.settings.audit
+    knowledge, audit = ctx.knowledge, session.config.audit
     print(f"대화를 시작합니다({'스트리밍' if stream else '일괄 응답'}). 명령을 보려면 /help 를 입력하세요.")
     while True:
         try:

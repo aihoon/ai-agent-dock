@@ -4,8 +4,8 @@ import pytest
 from fakes import TEST_CONFIG, FakeLLM, final, tool_call
 
 from ai_agent_dock.core.llm import Tool
-from ai_agent_dock.core.runtime.types import AgentSettings
-from ai_agent_dock.core.session import DEFAULT_SYSTEM_PROMPT, Session
+from ai_agent_dock.core.runtime.types import AgentConfig
+from ai_agent_dock.core.session import Session
 
 EMPTY_SCHEMA = {"type": "object", "properties": {}}
 
@@ -30,7 +30,7 @@ def flaky(*items):
 def test_second_turn_sees_first_turn():
     """기억: 두 번째 턴에서 모델이 받은 이력에 첫 번째 턴의 질문과 답이 들어 있다."""
     llm = FakeLLM([final("A1"), final("A2")])
-    session = Session(AgentSettings(config=TEST_CONFIG, llm=llm))
+    session = Session(AgentConfig(llm_config=TEST_CONFIG, llm=llm))
 
     session.ask("Q1")
     session.ask("Q2")
@@ -42,7 +42,7 @@ def test_second_turn_sees_first_turn():
 def test_conversation_continues_after_a_tool_turn():
     """Tool을 쓴 턴 뒤의 턴도 Tool 요청과 결과를 이력으로 가지고 이어진다."""
     llm = FakeLLM([tool_call("c1", "ping"), final("A1"), final("A2")])
-    session = Session(AgentSettings(config=TEST_CONFIG, tools=[ping_tool()], llm=llm))
+    session = Session(AgentConfig(llm_config=TEST_CONFIG, tools=[ping_tool()], llm=llm))
 
     session.ask("Q1")
     session.ask("Q2")
@@ -54,7 +54,7 @@ def test_conversation_continues_after_a_tool_turn():
 
 def test_failed_turn_is_rolled_back():
     """모델 호출이 예외로 실패하면 예외가 전달되고, 세션 이력은 그 턴 이전 그대로이며 다음 턴이 정상 동작한다."""
-    session = Session(AgentSettings(config=TEST_CONFIG, llm=flaky(final("A1"), RuntimeError("네트워크 오류"), final("A3"))))
+    session = Session(AgentConfig(llm_config=TEST_CONFIG, llm=flaky(final("A1"), RuntimeError("네트워크 오류"), final("A3"))))
     session.ask("Q1")
     before = list(session.history)
 
@@ -69,7 +69,7 @@ def test_failed_turn_is_rolled_back():
 
 def test_failure_in_the_middle_of_a_turn_leaves_no_partial_history():
     """Tool을 실행한 뒤 다음 모델 호출이 실패해도, 그 턴의 Tool 요청과 결과가 이력에 반쯤 남지 않는다."""
-    session = Session(AgentSettings(config=TEST_CONFIG, tools=[ping_tool()], llm=flaky(tool_call("c1", "ping"), RuntimeError("중간 실패"))))
+    session = Session(AgentConfig(llm_config=TEST_CONFIG, tools=[ping_tool()], llm=flaky(tool_call("c1", "ping"), RuntimeError("중간 실패"))))
 
     with pytest.raises(RuntimeError):
         session.ask("Q1")
@@ -80,7 +80,7 @@ def test_failure_in_the_middle_of_a_turn_leaves_no_partial_history():
 def test_max_steps_turn_keeps_history_and_the_next_turn_continues():
     """최대 스텝에 도달한 턴의 이력은 유지되고, 다음 턴은 Tool 결과 바로 뒤에 사용자 입력을 이어 받는다."""
     llm = FakeLLM([tool_call("c1", "ping"), tool_call("c2", "ping"), final("계속했다")])
-    session = Session(AgentSettings(config=TEST_CONFIG, tools=[ping_tool()], max_steps=2, llm=llm))
+    session = Session(AgentConfig(llm_config=TEST_CONFIG, tools=[ping_tool()], max_steps=2, llm=llm))
 
     first = session.ask("Q1")
     second = session.ask("계속해")
@@ -93,15 +93,15 @@ def test_max_steps_turn_keeps_history_and_the_next_turn_continues():
 
 def test_reset_clears_history_but_keeps_configuration():
     llm = FakeLLM([final("A1"), final("A2")])
-    session = Session(AgentSettings(config=TEST_CONFIG, tools=[ping_tool()], system_prompt="지침", max_steps=3, llm=llm))
+    session = Session(AgentConfig(llm_config=TEST_CONFIG, tools=[ping_tool()], system_prompt="지침", max_steps=3, llm=llm))
     session.ask("Q1")
 
     session.reset()
     session.ask("Q2")
 
     assert [m.content for m in llm.calls[1]] == ["Q2"]  # 초기화 뒤에는 앞 대화를 모른다.
-    assert session.settings.system_prompt == "지침" and session.settings.max_steps == 3
-    assert [t.name for t in session.settings.tools] == ["ping"]
+    assert session.config.system_prompt == "지침" and session.config.max_steps == 3
+    assert [t.name for t in session.config.tools] == ["ping"]
 
 
 def test_system_prompt_is_passed_every_call_but_not_stored_in_history():
@@ -111,10 +111,10 @@ def test_system_prompt_is_passed_every_call_but_not_stored_in_history():
         seen_system.append(request.system_prompt)
         return final("답")
 
-    session = Session(AgentSettings(config=TEST_CONFIG, llm=llm))
+    session = Session(AgentConfig(llm_config=TEST_CONFIG, system_prompt="지침", llm=llm))
     session.ask("Q1")
     session.ask("Q2")
 
-    assert seen_system == [DEFAULT_SYSTEM_PROMPT, DEFAULT_SYSTEM_PROMPT]
+    assert seen_system == ["지침", "지침"]
     assert all(m.role != "system" for m in session.history)
 

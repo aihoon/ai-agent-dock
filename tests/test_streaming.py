@@ -14,7 +14,7 @@ from ai_agent_dock.core.llm import LLMConfig, LLMRequest, LLMResponse, Tool, Too
 from ai_agent_dock.core.llm import client as llm_client
 from ai_agent_dock.core.llm.providers import anthropic as anthropic_provider
 from ai_agent_dock.core.llm.providers import openai as openai_provider
-from ai_agent_dock.core.runtime.types import AgentSettings
+from ai_agent_dock.core.runtime.types import AgentConfig
 from ai_agent_dock.core.session import Session
 
 EMPTY_SCHEMA = {"type": "object", "properties": {}}
@@ -174,9 +174,9 @@ def test_session_streams_text_of_every_step_and_keeps_same_history_as_batch():
 
     seen = []
 
-    streamed = Session(AgentSettings(config=TEST_CONFIG, tools=tools, llm=script()))
+    streamed = Session(AgentConfig(llm_config=TEST_CONFIG, tools=tools, llm=script()))
     result = streamed.ask("확인해", on_text_delta=seen.append)
-    batch = Session(AgentSettings(config=TEST_CONFIG, tools=tools, llm=script()))
+    batch = Session(AgentConfig(llm_config=TEST_CONFIG, tools=tools, llm=script()))
     batch.ask("확인해")
 
     assert "".join(seen) == "완료했습니다"
@@ -187,7 +187,7 @@ def test_session_streams_text_of_every_step_and_keeps_same_history_as_batch():
 def test_session_streams_text_that_comes_before_a_tool_call():
     """Tool을 부르기 전에 모델이 쓴 설명도 도착하는 대로 전달된다."""
     explain = LLMResponse(text="확인해 볼게요", tool_calls=[ToolCall("c1", "ping", {})])
-    session = Session(AgentSettings(config=TEST_CONFIG, tools=[Tool("ping", "", EMPTY_SCHEMA, lambda: "pong")], llm=FakeLLM([explain, final("끝")])))
+    session = Session(AgentConfig(llm_config=TEST_CONFIG, tools=[Tool("ping", "", EMPTY_SCHEMA, lambda: "pong")], llm=FakeLLM([explain, final("끝")])))
     seen = []
 
     session.ask("확인해", on_text_delta=seen.append)
@@ -203,7 +203,7 @@ def test_session_rolls_back_when_stream_breaks_midway():
         on_text_delta("안")
         raise ConnectionError("스트림 끊김")
 
-    session = Session(AgentSettings(config=TEST_CONFIG, llm=breaking))
+    session = Session(AgentConfig(llm_config=TEST_CONFIG, llm=breaking))
 
     with pytest.raises(ConnectionError):
         session.ask("질문", on_text_delta=seen.append)
@@ -218,4 +218,4 @@ def test_session_without_callback_does_not_pass_on_text_delta():
     def old_style(request):
         return final("답")
 
-    assert Session(AgentSettings(config=TEST_CONFIG, llm=old_style)).ask("질문").answer == "답"
+    assert Session(AgentConfig(llm_config=TEST_CONFIG, llm=old_style)).ask("질문").answer == "답"
