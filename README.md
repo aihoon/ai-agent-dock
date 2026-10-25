@@ -4,7 +4,7 @@
 Tool 호출, 스킬, 세션 기반 대화를 갖춘 플랫폼을 만들고, 그 위에 스킬·플러그인을 설치하거나 코드 워크플로를 얹어 **애플리케이션**을 만든다.
 
 ## 현재 단계
-C12 완료(서브에이전트: `agents/이름/AGENT.md`로 에이전트를 정의하고, main이 `delegate` Tool로 researcher에게 조사를 맡겨 최종 답만 받는다. 컨텍스트 격리, 읽기 전용 Tool, 부모-자식 추적, subagent 평가). 태그: `c0`, `c1`, `c1.1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8`, `c9`, `c10`, `c11`, `c12`(커밋 후 태그).
+C13 완료(Workflow - Prompt chaining: `prompt-chaining` 워크플로가 개요 작성 → gate(코드 검사) → 본문 작성으로 돈다. 단계마다 에이전트에 다른 사용자 프롬프트와 Tool을 준다. 단일 에이전트와 비교, 스텝 보기 리포트). 워크플로 패턴 트랙(C13~C19)의 첫 단계다. 태그: `c0`, `c1`, `c1.1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8`, `c9`, `c10`, `c11`, `c12`, `c13`(커밋 후 태그).
 
 ## 실행
 
@@ -22,6 +22,7 @@ uv run python examples/chat_walkthrough.py --scenario hitl              # 승인
 uv run python examples/chat_walkthrough.py --scenario workflow          # 고쳐 쓰기 → 승인 대기 → 새 연결로 재개(모델 없이)
 uv run python examples/chat_walkthrough.py --scenario safety            # 지시문이 든 파일 읽기 → 경고 있는 승인 메뉴 → 거부(모델 없이)
 uv run python examples/chat_walkthrough.py --scenario subagent          # main이 researcher에게 맡기고 답만 받는 모습, 스텝별 입력과 출력(모델 없이)
+uv run python examples/chat_walkthrough.py --scenario chain             # prompt-chaining의 gate 통과와 gate 실패, 단계마다 받은 Tool과 입력·출력(모델 없이)
 ```
 
 ### 채팅 명령
@@ -50,9 +51,11 @@ uv run python examples/chat_walkthrough.py --scenario subagent          # main�
 
 ```
 /workflow answer-check MCP 서버는 어떻게 연결해?
+/workflow prompt-chaining 이 프로젝트 문서에서 에이전트 루프의 최대 스텝은 어떻게 정해진다고 설명해?
 ```
 
 - `answer-check`: 답 작성(에이전트, 문서 검색) → 출처 검사(코드) → 실패하면 이유를 붙여 고쳐 쓰기(최대 `WORKFLOW_MAX_REVISIONS`, 기본 2번) → 사람 승인. 상한을 넘으면 "관련 문서에서 근거를 찾지 못했습니다"로 끝난다. 문서 색인이 없으면 시작하지 않는다. 이 워크플로 안에서는 되묻기(`ask_user`)를 쓰지 않는다.
+- `prompt-chaining`(C13): 개요 작성(에이전트, `search_docs`) → gate(코드: 항목 3~5개, 항목마다 출처, 이번에 검색한 출처인지) → 본문 작성(에이전트, Tool 없음, 개요와 검색 결과만 받는다). gate가 실패하면 고쳐 쓰지 않고 `gate 실패`와 이유로 끝난다. 사람 승인은 없다. 두 단계 모두 `run_agent`를 거치고, 단계마다 다른 것은 사용자 프롬프트와 Tool이다. gate는 Tool이 아니라 그래프 노드라 모델이 건너뛸 수 없다.
 - 진행 중에는 `▸ 답 작성`, `▸ 출처 검사: …`, `▸ 고쳐 쓰기 1/2`처럼 노드마다 한 줄씩 보인다.
 - 승인 메뉴는 `1) 승인`, `2) 거부`, `3) 다르게 요청(이유 입력)`이다. 엔터만 치면 승인 대기로 남는다. 승인 대기 상태는 `data/checkpoints.sqlite`에 저장되어 프로그램을 껐다 켜도 `/workflows`에 보이고 `/workflow-resume 번호`로 이어 간다.
 - 승인이나 근거 없음으로 끝나면 질문과 최종 답만 채팅 이력에 한 턴으로 붙는다. 초안과 고쳐 쓴 과정은 체크포인트와 추적 기록에만 남는다. 워크플로는 채팅의 앞선 대화를 보지 않는다.
@@ -107,6 +110,7 @@ uv run pytest                          # 가짜 모델 테스트만 실행한다
 uv run evals                           # 실제 모델로 평가 케이스를 실행한다(uv run pytest --live와 같다)
 uv run evals --provider anthropic --repeat 3   # 제공자를 바꾸고, 케이스마다 3번씩 돌린다
 uv run python scripts/trace_report.py          # 세션 목록(저장된 세션은 [이름]이 붙는다). show 세션이름 또는 세션번호 / total / compare 로 통계를 본다
+uv run python scripts/trace_report.py steps    # 가장 최근 세션을 스텝 순서대로: 프롬프트, 모델 출력, Tool 결과, 워크플로 노드. steps 세션번호로 세션을 고른다
 ```
 
 - 평가 케이스는 `evals/cases.jsonl`에 있다(git에 올린다). 카테고리는 tool, docs, approval, clarify, skill, memory, workflow, safety, subagent다. subagent 케이스는 맡겨야 하는지(`expect_delegate`)를 보고, 하위 에이전트가 부른 Tool도 판정에 센다. 평가는 웹 서버(`web`)를 연결하지 않는다. safety 케이스는 실제로 실행되면 안 되는 Tool(`forbid_executed`)과 평가 전용 문서 색인(`"knowledge": "fixtures"`)을 쓴다. 평가 전용 자료는 `evals/fixtures/`에 있고, 평가할 때 `data/sandbox/eval/`로 복사하고 `data/evals/index.sqlite`로 색인한다. workflow 케이스는 승인 단계의 답(`workflow_decisions`), 마지막 상태(`expect_status`), 고쳐 쓴 횟수 상한(`expect_max_revisions`)을 쓴다. memory 케이스는 앞선 턴(`setup_turns`), 마지막 질문 전 컴팩션(`compact_before`), 평가용 장기 메모리(`memory_items`)를 쓴다.
@@ -148,7 +152,7 @@ uv run python examples/chat.py             # 저장된 색인으로 검색하며
 ```
 
 - 임베딩은 OpenAI를 씁니다. 그래서 제공자를 Anthropic으로 골라도 `OPENAI_API_KEY`가 필요합니다.
-- 답의 출처는 `[문서 제목, 위치]` 형식으로 붙습니다. 검색 결과에 없는 출처는 `※` 경고로 표시합니다.
+- 답의 출처는 `[문서 제목, 위치]` 형식으로 붙습니다. 첫 소제목 앞 내용은 위치가 `처음`입니다(C13). 검색 결과에 없는 출처는 `※` 경고로 표시합니다.
 - 관련 문서가 없으면 모른다고 답합니다. 유사도 시작값은 0.3(`DEFAULT_THRESHOLD`)입니다.
 - `data/index.sqlite`는 문서에서 다시 만들 수 있으므로 git에서 제외합니다. 감사 로그는 `logs/audit.jsonl`에 쌓이며 `logs/`도 git에서 제외합니다.
 
@@ -161,6 +165,7 @@ Python 3.12, 패키지 관리는 [uv](https://docs.astral.sh/uv/)를 쓴다.
 - **스트리밍(Streaming)**: 응답이 만들어지는 대로 글자 조각(델타)을 받는 방식. 반대는 일괄 응답(Batch)
 - **스킬(Skill)**: 절차와 지침을 담은 `SKILL.md` 파일. 모델에게는 이름과 한 줄 설명만 보이고, 필요하면 `load_skill` Tool로 본문을 불러온다.
 - **서브에이전트(Subagent, 하위 에이전트)**: main이 `delegate` Tool로 일을 맡기는 에이전트. 새 이력과 줄인 Tool로 일하고 최종 답만 돌려준다.
+- **Prompt chaining**: 일을 정해진 단계로 나눠 앞 단계의 출력을 다음 단계의 입력으로 넘기는 워크플로. 단계 사이에 코드 검사(**gate**)를 둔다.
 - **툴 루프 에이전트(Tool loop agent)**: 모델이 Tool을 요청하고 결과를 받아 다시 답하는 과정을 반복하는 에이전트(ReAct 방식). 지금 `run_agent`가 이것이다.
 - 그 밖의 용어는 Notion의 Terminology 페이지에 정리한다.
 
@@ -181,7 +186,7 @@ Python 3.12, 패키지 관리는 [uv](https://docs.astral.sh/uv/)를 쓴다.
 - `src/ai_agent_dock/core/session/`: 대화 세션(턴 사이에 이력을 이어 간다), 세션 저장(`store.py`, `data/sessions/`), 컴팩션(`compact.py`)
 - `src/ai_agent_dock/core/memory/`: 장기 메모리(`data/memory.md`)
 - `src/ai_agent_dock/core/orchestration/`: 워크플로 실행 기반(`WorkflowRunner`: 시작, 재개, 승인 대기 찾기, 추적 기록). 체크포인트 저장 방식은 밖에서 받는다(채팅은 SQLite, 테스트와 평가는 메모리)
-- `src/ai_agent_dock/workflows/`: 워크플로 정의(`answer_check.py`). 애플리케이션이 자기 그래프를 정의하는 방식의 첫 예. core는 이 폴더를 import하지 않는다
+- `src/ai_agent_dock/workflows/`: 워크플로 정의(`answer_check.py`, `prompt_chaining.py`). 애플리케이션이 자기 그래프를 정의하는 방식의 첫 예. core는 이 폴더를 import하지 않는다
 - `src/ai_agent_dock/core/commands.py`: 슬래시 명령(이름, 사용법, 처리). 응용은 입력을 넘기고 결과를 보여 주기만 한다
 - `src/ai_agent_dock/core/skills/`: 스킬 로더. `skills/` 폴더의 `SKILL.md`를 읽고 머리말을 검사하며, 목록 문장과 `load_skill` Tool을 만든다
 - `src/ai_agent_dock/core/tools/`: 기본 제공 Tool(계산기, 현재 시각)과 `ToolRegistry`(이름 중복 방지, 인자 검증, 결과 길이 제한)

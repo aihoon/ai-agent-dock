@@ -14,6 +14,7 @@
   uv run python examples/chat_walkthrough.py --scenario safety   # 모델 없이: 파일 속 지시문 → 경고 붙은 결과 → 경고가 있는 승인 메뉴 → 거부, 안전 정책 차단
   uv run python examples/chat_walkthrough.py --scenario workflow # 모델 없이: 워크플로가 고쳐 쓰기 → 승인 대기 → (껐다 켜고) 재개하는 모습
   uv run python examples/chat_walkthrough.py --scenario subagent # 모델 없이: main이 researcher에게 맡기고 답만 받는 모습(C12)
+  uv run python examples/chat_walkthrough.py --scenario chain    # 모델 없이: 개요 → gate → 본문(prompt-chaining, C13), gate 실패로 멈추는 모습
   uv run python examples/chat_walkthrough.py --stream "17*23은 얼마야?"    # 실제 모델로 스트리밍
   uv run python examples/chat_walkthrough.py "17*23은 얼마야?" "거기에 2를 곱해 줘"   # 실제 모델로 여러 턴
   uv run python examples/chat_walkthrough.py --provider anthropic "안녕" "내가 방금 뭐라고 했지?"
@@ -31,6 +32,7 @@ from contextlib import ExitStack
 from pathlib import Path
 
 from dotenv import load_dotenv
+from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.sqlite import SqliteSaver
 from walkthrough import Tracer, ask, banner, describe, scripted  # C1 워크스루의 도구를 재사용한다.
 
@@ -39,7 +41,7 @@ from ai_agent_dock.core.hitl import Approval, ask_in_terminal
 from ai_agent_dock.core.llm import LLMConfig, LLMResponse, Tool, ToolCall, call_llm, config_from_env
 from ai_agent_dock.core.observability import Tracer as TraceFile
 from ai_agent_dock.core.orchestration import WorkflowContext, WorkflowRunner
-from ai_agent_dock.core.retrieval import HashingEmbedder, Knowledge, KnowledgeIndex, make_search_docs_tool
+from ai_agent_dock.core.retrieval import HashingEmbedder, Hit, Knowledge, KnowledgeIndex, make_search_docs_tool
 from ai_agent_dock.core.runtime.loop import run_agent
 from ai_agent_dock.core.runtime.types import AgentConfig
 from ai_agent_dock.core.safety import SafetyPolicy, with_safety
@@ -224,7 +226,7 @@ def hitl_write_tool(tracer):
 def main():
     parser = argparse.ArgumentParser(description="여러 턴 대화의 단계별 출력 데모")
     parser.add_argument("questions", nargs="*", help="실제 모델에 차례로 보낼 질문들(생략하면 기본 두 질문)")
-    parser.add_argument("--scenario", choices=[*SCENARIOS, "workflow", "safety", "subagent"], help="모델 없이 시나리오 실행")
+    parser.add_argument("--scenario", choices=[*SCENARIOS, "workflow", "safety", "subagent", "chain"], help="모델 없이 시나리오 실행")
     parser.add_argument("--provider", help="LLM 제공자(openai, anthropic). 생략하면 .env의 LLM_PROVIDER")
     parser.add_argument("--max-steps", type=int, help="한 턴에서 모델을 호출하는 횟수 상한")
     parser.add_argument("--stream", action="store_true", help="스트리밍으로 받아 글자 조각이 도착하는 모습을 보여 준다")
@@ -238,6 +240,8 @@ def main():
         return walk_safety()
     if args.scenario == "subagent":
         return walk_subagent()
+    if args.scenario == "chain":
+        return walk_chain()
 
     if args.scenario:
         questions, model, scenario_steps = SCENARIOS[args.scenario]
@@ -459,6 +463,47 @@ def walk_subagent():
         print(f"  {i}. {describe(m)}")
     print(f"  답: {result.answer}")
     print(f"  스텝: main {steps[MAIN]}번, researcher {steps['researcher']}번(main의 스텝 1 안에서 일어났다)")
+
+
+def walk_chain():
+    """prompt-chaining 워크플로(C13)를 가짜 모델로 두 번 돌린다. 한 번은 gate를 통과해 본문까지, 한 번은 gate에서 멈춘다.
+    단계마다 에이전트를 새 이력으로 부르므로, 단계의 입력은 사용자 프롬프트 하나다. 단계마다 받은 Tool도 보여 준다."""
+    cite = "에이전트 루프, 최대 스텝"
+
+    class Store:  # 가짜 문서 검색: 늘 같은 문서 하나를 찾는다.
+        def search(self, query, top_k=3):
+            return [Hit(cite=cite, section="최대 스텝", text="한 턴에서 모델을 부르는 횟수의 상한은 AGENT_MAX_STEPS다(기본 10).", score=0.9)]
+
+    outline = f"- 최대 스텝은 모델 호출 횟수의 상한이다 [{cite}]\n- 기본값은 10이다 [{cite}]\n- AGENT_MAX_STEPS로 바꾼다 [{cite}]"
+    runs = [
+        ("gate 통과", "에이전트 루프의 최대 스텝은 어떻게 정해져?", scripted(
+            ask("s1", "search_docs", query="최대 스텝"), final(outline),
+            final(f"최대 스텝은 한 턴에서 모델을 부르는 횟수의 상한이고 [{cite}], 기본값 10을 AGENT_MAX_STEPS로 바꾼다 [{cite}]."),
+        )),
+        ("gate 실패", "서울의 내일 날씨는 어때?", scripted(
+            ask("s1", "search_docs", query="서울 내일 날씨"), final("- 내일 서울은 맑다"),
+        )),
+    ]
+    llm_config = LLMConfig(provider="scenario", model="scenario", max_output_tokens=None)
+    knowledge = Knowledge(store=Store(), seen=set(), files=1, chunks=1)
+    for title, question, script in runs:
+        def llm(request, on_text_delta=None, script=script):
+            last = max((i for i, m in enumerate(request.messages) if m.role == "assistant"), default=-1)
+            print(f"    모델 호출 (받은 Tool: {', '.join(t.name for t in request.tools) or '없음'})")
+            for m in request.messages[last + 1 :]:
+                print("      입력: " + describe(m).replace("\n", "\n            "))
+            response = script(request)
+            for c in response.tool_calls:
+                print(f"      출력: Tool 요청 {c.name}({c.arguments})")
+            if not response.tool_calls:
+                print("      출력: " + (response.text or "").replace("\n", "\n            "))
+            return response
+
+        config = AgentConfig(llm_config=llm_config, tools=BUILTIN_TOOLS, llm=llm)
+        context = WorkflowContext(config=config, knowledge=knowledge, progress=lambda message: print(f"  ▸ {message}"))
+        banner(f"{title}: /workflow prompt-chaining {question}")
+        outcome = WorkflowRunner(WORKFLOWS, context, InMemorySaver()).start("prompt-chaining", question)
+        print(f"\n→ 상태: {outcome.status}\n  답: {outcome.answer}")
 
 
 def walk_workflow():

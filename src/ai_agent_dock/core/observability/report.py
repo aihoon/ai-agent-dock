@@ -1,6 +1,7 @@
 """추적 리포트 계산: logs/sessions/의 세션 파일을 읽어 세션 목록, 세션별 통계, 전체 통계, 세션별 비교를 만든다.
 
-질문과 답 같은 내용은 보여 주지 않는다. 호출 수, 걸린 시간, 토큰 수만 센다.
+통계는 질문과 답 같은 내용은 보여 주지 않는다. 호출 수, 걸린 시간, 토큰 수만 센다.
+내용은 스텝 보기(format_steps)에서만 보여 준다(C13 T6).
 """
 
 from __future__ import annotations
@@ -153,4 +154,37 @@ def format_compare(stats: list[SessionStats]) -> str:
             f"  {s.session:<26}  {len(s.turns):>2}  {s.total('llm_calls'):>3.0f}  {s.total('tool_calls'):>4.0f}  "
             f"{s.total('duration_ms'):>9.1f}  {s.total('input_tokens'):>9.0f}  {s.total('output_tokens'):>8.0f}"
         )
+    return "\n".join(rows)
+
+
+STEP_TEXT_LIMIT = 400  # 스텝 보기에서 글 하나를 줄이는 길이(글자)
+
+
+def _short(value: object) -> str:
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+    text = "\n      ".join(row for row in text.splitlines() if row.strip())  # 여러 줄 글은 빈 줄을 빼고 들여 쓴다.
+    return text if len(text) <= STEP_TEXT_LIMIT else f"{text[:STEP_TEXT_LIMIT]}… (+{len(text) - STEP_TEXT_LIMIT}자)"
+
+
+def format_steps(lines: list[dict]) -> str:
+    """세션 하나를 기록 순서대로: 에이전트에 준 프롬프트, 스텝마다 모델 출력과 Tool 결과, 워크플로 노드의 상태 변경."""
+    rows = []
+    for line in lines:
+        kind, who = line["kind"], f"[{line['agent']}] " if line.get("agent") else ""
+        if kind == "workflow_start":
+            rows.append(f"━━ 워크플로 {line.get('workflow')}: {line.get('question')}")
+        elif kind == "turn_start":
+            rows.append(f"{who}[턴 {line['turn']}] 프롬프트: {_short(line.get('question'))}")
+        elif kind == "llm":
+            calls = ", ".join(f"{c['name']}({_short(c.get('arguments'))})" for c in line.get("tool_calls") or [])
+            out = f"Tool 요청 {calls}" if calls else _short(line.get("text"))
+            rows.append(f"  {who}스텝 {line['step']} 모델 → {out}  (입력 {line.get('input_tokens')}, 출력 {line.get('output_tokens')}, {line.get('duration_ms')}ms)")
+        elif kind == "tool":
+            rows.append(f"    {who}Tool {line['name']} → {_short(line.get('result'))}")
+        elif kind == "delegate":
+            rows.append(f"    위임 → {line.get('target')}: {_short(line.get('task'))}")
+        elif kind == "workflow_node":
+            rows.append(f"▸ 노드 {line['node']}: " + ", ".join(f"{k}={_short(v)}" for k, v in (line.get("update") or {}).items()))
+        elif kind == "workflow_end":
+            rows.append(f"━━ 워크플로 끝: {line.get('status')}")
     return "\n".join(rows)

@@ -111,9 +111,10 @@ def test_search_orders_by_score_and_drops_low_scores(tmp_path):
 
     hits = index.search("Tool 인자 스키마", top_k=5)
 
-    assert hits[0].cite == "Tool 정의"
+    assert hits[0].cite == "Tool 정의, 처음"  # 소제목 앞 내용도 [제목, 위치] 형식이라 출처 검사를 통과한다
+    assert check_citations(f"답 [{hits[0].cite}]", {hits[0].cite}).cited == [hits[0].cite]
     assert all(hit.score >= DEFAULT_THRESHOLD for hit in hits)
-    assert all(hit.cite != "요리" for hit in hits)
+    assert all(hit.cite != "요리, 처음" for hit in hits)
 
 
 def test_search_returns_nothing_when_no_chunk_is_close(tmp_path):
@@ -158,8 +159,8 @@ def test_search_docs_tool_returns_hits_and_records_their_sources(tmp_path):
 
     output = tool.func(query="Tool 인자 스키마")
 
-    assert "[Tool 정의]" in output
-    assert "Tool 정의" in seen
+    assert "[Tool 정의, 처음]" in output
+    assert "Tool 정의, 처음" in seen
 
 
 def test_search_docs_tool_says_nothing_found_and_records_nothing(tmp_path):

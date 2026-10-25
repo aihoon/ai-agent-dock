@@ -110,10 +110,11 @@ def _document_title(content: str, fallback: str) -> str:
 
 
 def _cite(title: str, section: str) -> str:
-    """출처 표기: [문서 제목, 위치]. 위치가 문서 제목과 같으면 제목만 쓴다."""
-    if section and section != title:
-        return f"{title}, {section}"
-    return title
+    """출처 표기: [문서 제목, 위치]. 소제목 앞 내용은 위치를 '처음'으로 쓴다.
+
+    출처 검사(citation.CITE)는 쉼표가 있어야 출처로 보므로 위치를 늘 붙인다(C13 T6).
+    """
+    return f"{title}, {section if section and section != title else '처음'}"
 
 
 def _cosine(a: list[float], b: list[float]) -> float:

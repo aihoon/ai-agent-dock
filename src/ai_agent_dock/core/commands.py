@@ -325,7 +325,7 @@ def _memory_delete(ctx: CommandContext, arg: str) -> str:
     return f"{n}번을 지웠습니다. 다음 턴부터 반영합니다."
 
 
-STATUS = {"approved": "승인", "rejected": "거부", "no_evidence": "근거 없음"}
+STATUS = {"approved": "승인", "rejected": "거부", "no_evidence": "근거 없음", "completed": "완료", "gate_failed": "gate 실패"}
 
 
 def _report(ctx: CommandContext, outcome: Outcome) -> str:

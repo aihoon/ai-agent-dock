@@ -1,8 +1,8 @@
-"""추적 리포트 테스트: 세션 목록, 세션별 통계, 전체 통계, 세션별 비교."""
+"""추적 리포트 테스트: 세션 목록, 세션별 통계, 전체 통계, 세션별 비교, 스텝 보기."""
 
 import json
 
-from ai_agent_dock.core.observability.report import all_stats, format_compare, format_list, format_session, format_total
+from ai_agent_dock.core.observability.report import all_stats, format_compare, format_list, format_session, format_steps, format_total
 
 
 def write_session(directory, session, turns):
@@ -70,3 +70,23 @@ def test_cached_tokens_are_summed_and_command_records_are_not_turns(tmp_path):
 def test_list_shows_saved_session_names(tmp_path):
     text = format_list(make(tmp_path), {"20261018-100000-aaaa": "고래 테스트"})
     assert "20261018-100000-aaaa" in text and "[고래 테스트]" in text and text.count("[") == 1
+
+
+def test_steps_show_prompt_model_output_tool_result_and_workflow_nodes_in_order():
+    lines = [
+        {"kind": "session_start", "turn": 0},
+        {"kind": "workflow_start", "turn": 0, "workflow": "prompt-chaining", "question": "최대 스텝은?"},
+        {"kind": "turn_start", "turn": 1, "question": "개요를 써라"},
+        {"kind": "llm", "turn": 1, "step": 1, "tool_calls": [{"name": "search_docs", "arguments": {"query": "최대 스텝"}}], "input_tokens": 10, "output_tokens": 2},
+        {"kind": "tool", "turn": 1, "step": 1, "name": "search_docs", "result": "x" * 500},
+        {"kind": "llm", "turn": 1, "step": 2, "agent": "researcher", "text": "- 하나\n- 둘", "tool_calls": []},
+        {"kind": "workflow_node", "turn": 1, "node": "gate", "update": {"problem": "출처 없는 항목 1개"}},
+        {"kind": "workflow_end", "turn": 1, "status": "gate_failed"},
+    ]
+    rows = format_steps(lines).splitlines()
+
+    assert rows[0] == "━━ 워크플로 prompt-chaining: 최대 스텝은?" and rows[1] == "[턴 1] 프롬프트: 개요를 써라"
+    assert 'Tool 요청 search_docs({"query": "최대 스텝"})' in rows[2]
+    assert rows[3].endswith("… (+100자)")  # 긴 Tool 결과는 줄인다
+    assert "[researcher] 스텝 2 모델 → - 하나" in rows[4] and rows[5].strip().startswith("- 둘")  # 여러 줄은 들여 쓴다
+    assert rows[6] == "▸ 노드 gate: problem=출처 없는 항목 1개" and rows[7] == "━━ 워크플로 끝: gate_failed"
