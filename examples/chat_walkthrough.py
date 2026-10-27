@@ -15,6 +15,7 @@
   uv run python examples/chat_walkthrough.py --scenario workflow # 모델 없이: 워크플로가 고쳐 쓰기 → 승인 대기 → (껐다 켜고) 재개하는 모습
   uv run python examples/chat_walkthrough.py --scenario subagent # 모델 없이: main이 researcher에게 맡기고 답만 받는 모습(C12)
   uv run python examples/chat_walkthrough.py --scenario chain    # 모델 없이: 개요 → gate → 본문(prompt-chaining, C13), gate 실패로 멈추는 모습
+  uv run python examples/chat_walkthrough.py --scenario routing  # 모델 없이: router가 분류 → 경로마다 다른 프롬프트, Tool, 모델(C14), 분류 실패 → general
   uv run python examples/chat_walkthrough.py --stream "17*23은 얼마야?"    # 실제 모델로 스트리밍
   uv run python examples/chat_walkthrough.py "17*23은 얼마야?" "거기에 2를 곱해 줘"   # 실제 모델로 여러 턴
   uv run python examples/chat_walkthrough.py --provider anthropic "안녕" "내가 방금 뭐라고 했지?"
@@ -226,7 +227,7 @@ def hitl_write_tool(tracer):
 def main():
     parser = argparse.ArgumentParser(description="여러 턴 대화의 단계별 출력 데모")
     parser.add_argument("questions", nargs="*", help="실제 모델에 차례로 보낼 질문들(생략하면 기본 두 질문)")
-    parser.add_argument("--scenario", choices=[*SCENARIOS, "workflow", "safety", "subagent", "chain"], help="모델 없이 시나리오 실행")
+    parser.add_argument("--scenario", choices=[*SCENARIOS, "workflow", "safety", "subagent", "chain", "routing"], help="모델 없이 시나리오 실행")
     parser.add_argument("--provider", help="LLM 제공자(openai, anthropic). 생략하면 .env의 LLM_PROVIDER")
     parser.add_argument("--max-steps", type=int, help="한 턴에서 모델을 호출하는 횟수 상한")
     parser.add_argument("--stream", action="store_true", help="스트리밍으로 받아 글자 조각이 도착하는 모습을 보여 준다")
@@ -242,6 +243,8 @@ def main():
         return walk_subagent()
     if args.scenario == "chain":
         return walk_chain()
+    if args.scenario == "routing":
+        return walk_routing()
 
     if args.scenario:
         questions, model, scenario_steps = SCENARIOS[args.scenario]
@@ -504,6 +507,38 @@ def walk_chain():
         banner(f"{title}: /workflow prompt-chaining {question}")
         outcome = WorkflowRunner(WORKFLOWS, context, InMemorySaver()).start("prompt-chaining", question)
         print(f"\n→ 상태: {outcome.status}\n  답: {outcome.answer}")
+
+
+def walk_routing():
+    """routing 워크플로(C14)를 가짜 모델로 세 번 돌린다. 계산은 utility, 인사는 chat, 엉뚱한 분류는 general로 간다.
+    호출마다 어떤 시스템 프롬프트(첫 줄), 모델, Tool을 받았는지 보여 준다. 모델 호출은 가짜라 네트워크를 쓰지 않는다."""
+    runs = [
+        ("계산", "3의 12제곱은 얼마야?", scripted(final("utility"), ask("c1", "calculate", expression="3**12"), final("3의 12제곱은 531441입니다."))),
+        ("인사", "안녕! 한마디 해 줘.", scripted(final("chat"), final("안녕하세요! 좋은 하루 보내세요."))),
+        ("분류 실패", "문서 찾아서 파일로 저장해 줘.", scripted(final("경로: docs 그리고 files"), final("(main이 모든 Tool로 처리한 답)"))),
+    ]
+    team = AgentTeam(load_agents(Path(__file__).resolve().parent.parent / "agents"))
+    llm_config = LLMConfig(provider="scenario", model="scenario", max_output_tokens=None)
+    for title, question, script in runs:
+        def llm(request, on_text_delta=None, script=script):
+            first = (request.system_prompt or "").splitlines()[0]
+            print(f"    모델 호출 ({request.config.provider}:{request.config.model}, 받은 Tool: {', '.join(t.name for t in request.tools) or '없음'})")
+            print(f"      시스템 프롬프트: {first} …")
+            print("      입력: " + describe(request.messages[-1]).replace("\n", "\n            "))
+            response = script(request)
+            for c in response.tool_calls:
+                print(f"      출력: Tool 요청 {c.name}({c.arguments})")
+            if not response.tool_calls:
+                print("      출력: " + (response.text or ""))
+            return response
+
+        base = AgentConfig(llm_config=llm_config, tools=BUILTIN_TOOLS, llm=llm)
+        context = WorkflowContext(
+            config=team.config_for(MAIN, base), team=team, base=base, progress=lambda message: print(f"  ▸ {message}")
+        )
+        banner(f"{title}: /workflow routing {question}")
+        outcome = WorkflowRunner(WORKFLOWS, context, InMemorySaver()).start("routing", question)
+        print(f"\n→ 경로: {outcome.route}\n  답: {outcome.answer}")
 
 
 def walk_workflow():

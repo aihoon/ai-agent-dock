@@ -111,7 +111,7 @@ def test_regression_is_a_case_that_passed_before_and_fails_now():
 def test_case_file_covers_every_category_and_builtin_tool():
     cases = load_cases(CASES)
     assert len({c.id for c in cases}) == len(cases)  # id는 겹치지 않는다
-    assert {c.category for c in cases} == {"tool", "docs", "approval", "clarify", "skill", "memory", "workflow", "safety", "subagent"}
+    assert {c.category for c in cases} == {"tool", "docs", "approval", "clarify", "skill", "memory", "workflow", "safety", "subagent", "routing"}
     expected = {name for c in cases for name in c.expect_tools}
     builtin = {t.name for t in BUILTIN_TOOLS} | {"ask_user", "search_docs", "load_skill"}
     assert builtin <= expected  # 빌트인 Tool마다 최소 한 케이스

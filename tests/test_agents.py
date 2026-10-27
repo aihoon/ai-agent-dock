@@ -33,7 +33,7 @@ POOL = [tool("calculate"), tool("ask_user"), tool("load_skill"), tool("search_do
 def agent_file(root, name, tools, body="역할 지침"):
     folder = root / name
     folder.mkdir(parents=True)
-    (folder / "AGENT.md").write_text(f"---\nname: {name}\ndescription: {name} 설명\ntools: {tools}\n---\n{body}\n", encoding="utf-8")
+    (folder / "AGENT.md").write_text(f"---\nname: {name}\ndescription: {name} 설명\ntools: {tools}\ndelegate: true\n---\n{body}\n", encoding="utf-8")
 
 
 class Recorder:
@@ -56,7 +56,7 @@ def team_and_base(llm, tools=POOL, **team_args):
 
 def test_project_agents_load_and_main_keeps_the_old_base_prompt():
     agents = load_agents(AGENTS)
-    assert list(agents) == [MAIN, "researcher"]
+    assert list(agents) == ["chat", MAIN, "researcher", "router", "web"]  # chat, router, web은 C14 routing 경로용
     assert agents[MAIN].body.startswith("당신은 도움이 되는 어시스턴트다.")  # 예전 DEFAULT_SYSTEM_PROMPT를 글자 그대로 옮겼다(Q11).
     assert agents[MAIN].tools == ("*", "!web__*")
     assert agents["researcher"].max_steps == 6
@@ -154,7 +154,10 @@ def test_depth_and_cycles(tmp_path):
 
 def test_subagent_write_tool_is_refused_and_missing_names_warn(tmp_path):
     team = AgentTeam(load_agents(AGENTS))
-    assert team.check(POOL[:4]) == ["에이전트 researcher: 연결되지 않은 Tool은 빼고 씁니다: web__tavily_search, web__tavily_extract"]
+    assert team.check(POOL[:4]) == [
+        "에이전트 researcher: 연결되지 않은 Tool은 빼고 씁니다: web__tavily_search, web__tavily_extract",
+        "에이전트 web: 연결되지 않은 Tool은 빼고 씁니다: web__tavily_search, web__tavily_extract, get_current_time",
+    ]
     agent_file(tmp_path, MAIN, "*")
     agent_file(tmp_path, "writer", "files__*")
     with pytest.raises(AgentFormatError, match="읽기 전용 Tool만"):

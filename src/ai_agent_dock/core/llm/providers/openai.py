@@ -26,7 +26,7 @@ from ..types import (
     UserMessage,
 )
 
-DEFAULT_MODEL = "gpt-5-mini"
+DEFAULT_MODEL = "gpt-6-luna"
 
 
 @cache

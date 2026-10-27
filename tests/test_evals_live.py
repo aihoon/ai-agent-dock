@@ -98,6 +98,8 @@ def test_cases_with_real_model(request):
         mcp_tools = connect_mcp(stack)
         policy = load_safety_policy(FIXTURES / "safety.json") if "files" in mcp_tools else None  # 안전 정책은 파일 서버 Tool을 막는다.
 
+        last = {}  # 마지막으로 만든 base. evaluate는 make_config(case) 바로 뒤에 workflows를 부른다.
+
         def make_config(case):
             kb = fixture_knowledge if case.knowledge == "fixtures" else knowledge
             registry = ToolRegistry(max_result_chars=env_int("TOOL_RESULT_MAX_CHARS", DEFAULT_MAX_RESULT_CHARS))
@@ -112,6 +114,7 @@ def test_cases_with_real_model(request):
                 tracer=tracer,
             )
             base = with_safety(config, policy=policy)[0]  # 채팅과 같은 Safety(C11 D17)
+            last["base"] = base  # routing 케이스가 경로마다 에이전트를 만들 때 쓴다(C14).
             return team.config_for(MAIN, base, skills=skills, memory=case.memory_items)  # 채팅과 같은 main(C12)
 
         first = make_config(cases[0])
@@ -130,7 +133,9 @@ def test_cases_with_real_model(request):
             return compact(history, keep_turns=env_int("COMPACT_KEEP_TURNS", 4), summarize=summarize_text, count=count)[0]
 
         def workflows(config):  # 워크플로 케이스(C10): 체크포인트는 메모리에 둔다(평가는 재개하지 않는다).
-            context = WorkflowContext(config=config, knowledge=knowledge, max_revisions=env_int("WORKFLOW_MAX_REVISIONS", 2))
+            context = WorkflowContext(
+                config=config, knowledge=knowledge, max_revisions=env_int("WORKFLOW_MAX_REVISIONS", 2), team=team, base=last["base"]
+            )
             return WorkflowRunner(WORKFLOWS, context, InMemorySaver())
 
         results = [

@@ -4,18 +4,19 @@ main과 하위 에이전트는 같은 함수(config_for)로 만든다. 차이는
 delegate로 불린 에이전트(깊이 1 이상)는 장기 메모리, 스킬 목록, ask_user, load_skill을 받지 않는다(컨텍스트 격리, Q4, Q7).
 하위 에이전트는 새 이력으로 task만 받고 최종 답만 돌려준다(Q5). 승인, Safety, Hook, 감사 로그는 부모 것을 그대로 쓴다(D6).
 delegate와 에이전트 목록은 함께 붙고 함께 빠진다. 붙는 조건: tools에 delegate가 맞고, 깊이 < SUBAGENT_MAX_DEPTH이고,
-부를 에이전트(자기 자신, 부모 줄, main을 뺀 나머지)가 남을 때(Q12).
+부를 에이전트(자기 자신, 부모 줄, main, delegate: false를 뺀 나머지)가 남을 때(Q12, C14 Q2-2).
+워크플로는 only로 Tool을 더 좁힐 수 있다(C14 Routing의 경로 표, Q2-3). AGENT.md의 model이 있으면 그 모델로 돈다(C14 Q3).
 의존 방향: core/agents → core/runtime. runtime은 agents를 모른다(delegate는 Tool일 뿐이다).
 """
 
 from __future__ import annotations
 
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 
 from ..hitl import Approval
-from ..llm import Tool, ToolCall
+from ..llm import Tool, ToolCall, model_config
 from ..observability import Tracer
 from ..runtime.loop import run_agent
 from ..runtime.types import AgentResult, AgentConfig
@@ -42,6 +43,7 @@ class AgentTeam:
     approve_for: Callable[[str], Callable[[ToolCall], Approval]] | None = None  # 하위 에이전트 이름 → 승인 함수(메뉴에 [이름], Q7)
     on_start: Callable[[str, str], None] | None = None  # (에이전트, task). 응용이 진행 줄을 보여 준다(F5).
     on_end: Callable[[str, AgentResult], None] | None = None  # (에이전트, 결과). 평가가 하위 에이전트의 Tool 호출을 모은다.
+    wrap_llm: Callable[[str, Callable], Callable] | None = None  # (에이전트, 모델 호출 함수) → 감싼 함수. 응용이 진행 줄에 에이전트 이름을 붙인다.
 
     def __post_init__(self) -> None:
         if not 1 <= self.max_depth <= MAX_DEPTH:
@@ -55,7 +57,7 @@ class AgentTeam:
             if agent.name == MAIN:
                 continue
             writes = [t.name for t in self._tools_of(agent, tools, depth=1) if not t.read_only]
-            if writes:
+            if writes and agent.delegate:  # 맡길 수 없는 에이전트(경로 전용)는 하위 에이전트가 아니다.
                 raise AgentFormatError(
                     f"{agent.path}: 하위 에이전트는 읽기 전용 Tool만 쓴다(C12 D2): {', '.join(writes)}. "
                     '서버가 읽기 전용 힌트를 주지 않는 Tool이면 mcp.json의 서버 항목에 "read_only"로 적는다.'
@@ -70,7 +72,7 @@ class AgentTeam:
         if depth >= self.max_depth or not matches(self.agents[name].tools, DELEGATE):
             return []
         blocked = {MAIN, name, *parents}  # 자기 자신과 부모 줄을 부르면 순환한다.
-        return [a for a in self.agents.values() if a.name not in blocked]
+        return [a for a in self.agents.values() if a.name not in blocked and a.delegate]
 
     def config_for(
         self,
@@ -82,16 +84,21 @@ class AgentTeam:
         depth: int = 0,
         parents: tuple[str, ...] = (),
         tracer: Tracer | None = None,
+        only: Iterable[str] | None = None,
     ) -> AgentConfig:
         """에이전트 하나의 설정. base는 모든 에이전트가 함께 쓰는 설정(모델, 설치된 전체 Tool, 승인, Safety, Hook, 감사 로그, 추적)이다.
 
         main은 depth=0으로 부르고 skills와 memory를 넘긴다. 하위 에이전트는 delegate가 depth와 parents, tracer를 넘긴다.
+        only를 주면 AGENT.md의 Tool 중 only에도 맞는 것만 준다(교집합). delegate도 only에 맞아야 붙는다.
         """
         agent = self.agents[name]
         if depth == 0:
             tracer = base.tracer
         tools = self._tools_of(agent, base.tools, depth)
-        targets = self.targets(name, depth, parents)
+        if only is not None:
+            only = list(only)
+            tools = select_tools(only, tools)
+        targets = self.targets(name, depth, parents) if only is None or matches(only, DELEGATE) else []
         if targets:
             tools.append(self._delegate_tool(base, depth, (*parents, name), targets, tracer))
         # 하위 에이전트는 load_skill이 없어 스킬 목록이 빠진다. 메모리는 여기서 뺀다(Q4).
@@ -101,7 +108,9 @@ class AgentTeam:
         else:  # 하위 에이전트: AGENT.md > SUBAGENT_MAX_STEPS
             max_steps = agent.max_steps or self.max_steps
             approve = self.approve_for(name) if self.approve_for else base.approve
-        return replace(base, tools=tools, system_prompt=prompt, max_steps=max_steps, tracer=tracer, approve=approve)
+        llm_config = model_config(agent.model, base.llm_config) if agent.model else base.llm_config
+        llm = self.wrap_llm(name, base.llm) if self.wrap_llm else base.llm
+        return replace(base, llm_config=llm_config, llm=llm, tools=tools, system_prompt=prompt, max_steps=max_steps, tracer=tracer, approve=approve)
 
     def _tools_of(self, agent: AgentSpec, tools: list[Tool], depth: int) -> list[Tool]:
         pool = tools if depth == 0 else [t for t in tools if t.name not in PARENT_ONLY]

@@ -54,6 +54,25 @@ KNOWLEDGE_DIR = Path(__file__).resolve().parent.parent / "knowledge"  # 프로�
 INDEX_PATH = Path(__file__).resolve().parent.parent / "data" / "index.sqlite"  # 문서 색인(문서에서 다시 만들 수 있다). data/는 git에서 제외한다.
 AGENTS_DIR = Path(__file__).resolve().parent.parent / "agents"  # 에이전트 정의(C12). .env의 AGENTS_DIR로 바꿀 수 있다.
 TASK_PREVIEW = 50  # 위임 진행 줄에 보여 줄 task 글자 수
+SETUP_STEPS = 7  # 시작 화면의 단계 수
+NAMES_LIMIT = 6  # 시작 화면에서 이름을 다 보여 줄 개수. 넘으면 개수만 보여 준다.
+BAR = "━" * 60
+RULE_MODE = {"deny": "막음(deny)", "ask": "승인 받기(ask)"}
+TOOL_SOURCE = {  # 내장 Tool의 출처(core/toolkit.py의 make_builtin_tools)
+    "builtin": "코드 core/tools, core/hitl",
+    "skills": "skills/의 스킬이 있을 때",
+    "knowledge": "문서 색인이 열렸을 때",
+}
+
+
+def setup_step(n: int, title: str, source: str = "") -> None:
+    """시작 화면의 한 단계 머리(C14): 구분선, 번호, 하는 일, 읽는 곳."""
+    print(f"{BAR}\n[{n}/{SETUP_STEPS}] {title}" + (f"  ({source})" if source else ""), flush=True)
+
+
+def names(items: list[str]) -> str:
+    """이름 목록. 많으면 개수만."""
+    return f"{len(items)}개" + (f": {', '.join(items)}" if len(items) <= NAMES_LIMIT else "")
 
 
 class Progress:
@@ -110,10 +129,13 @@ class Progress:
         self.begin_turn()
         self._say(f"▸ {message}")
 
-    def wrap_llm(self, llm):
+    def wrap_llm(self, agent: str, llm):
+        """AgentTeam이 에이전트마다 감싼다. 진행 줄에 어느 에이전트가 어느 모델을 부르는지 보인다(C14)."""
+
         def traced(request, on_text_delta=None):
             self.step += 1
-            self._say(f"  · 모델 호출 중 (스텝 {self.step})")
+            model = f"{request.config.provider}:{request.config.model}"
+            self._say(f"  · [{agent}] 모델 호출 중 (스텝 {self.step}, {model})")
             return llm(request, on_text_delta=on_text_delta)
 
         return traced
@@ -151,37 +173,48 @@ def main():
         raise SystemExit(f"설정 오류: {e}")
 
     progress = Progress()
-    llm = progress.wrap_llm(call_llm)
     with ExitStack() as stack:  # MCP 서버 연결은 프로그램이 끝날 때 이 with가 정리한다.
+        agents_dir = Path(env_str("AGENTS_DIR", str(AGENTS_DIR)))
+        setup_step(1, "에이전트 찾기", f"{agents_dir.name}/*/AGENT.md")
         try:
-            skills = scan_skills(SKILLS_DIR)
             team = AgentTeam(  # 에이전트 정의(AGENT.md)와 위임 규칙(C12)
-                load_agents(Path(env_str("AGENTS_DIR", str(AGENTS_DIR)))),
+                load_agents(agents_dir),
                 max_depth=env_int("SUBAGENT_MAX_DEPTH", 1),
                 max_steps=env_int("SUBAGENT_MAX_STEPS", 6),
                 max_result_chars=env_int("TOOL_RESULT_MAX_CHARS", DEFAULT_MAX_RESULT_CHARS),
                 approve_for=lambda name: lambda call: ask_in_terminal(call, interactive=sys.stdin.isatty(), notice=safety.notice(), agent=name),
                 on_start=progress.delegate_start,
                 on_end=progress.delegate_end,
+                wrap_llm=progress.wrap_llm,  # 진행 줄에 에이전트 이름을 붙인다(C14).
             )
+            print(f"  → {names(list(team.agents))} (맡기기 깊이 상한 {team.max_depth})")
+            setup_step(2, "스킬 찾기", f"{SKILLS_DIR.name}/*/SKILL.md")
+            skills = scan_skills(SKILLS_DIR)
+            print(f"  → {names([s.name for s in skills])}")
         except ValueError as e:  # 스킬이나 에이전트 정의의 형식 오류 등
             raise SystemExit(f"설정 오류: {e}")
-        print(f"에이전트 {len(team.agents)}개: {', '.join(team.agents)} (맡기기 깊이 상한 {team.max_depth})")
-        if skills:
-            print(f"스킬 {len(skills)}개를 찾았습니다.")
+        setup_step(3, "문서 색인 열기", f"{INDEX_PATH.parent.name}/{INDEX_PATH.name}")
         knowledge = None
         try:
             knowledge = open_knowledge(INDEX_PATH)
         except Exception as e:  # 색인 파일이 깨졌거나 열 수 없으면 문서 검색만 끄고 계속한다.
-            print(f"문서 검색을 끕니다: {type(e).__name__}: {e}")
+            print(f"  ⚠ 문서 검색을 끕니다: {type(e).__name__}: {e}")
         if knowledge:
-            print(f"문서 검색을 켰습니다(문서 {knowledge.files}개, 청크 {knowledge.chunks}개).")
+            print(f"  → 문서 검색 켜짐: 문서 {knowledge.files}개, 청크 {knowledge.chunks}개")
         elif any(KNOWLEDGE_DIR.glob("*.md")):
-            print("문서 색인이 없습니다. uv run python scripts/index_knowledge.py 를 먼저 실행하세요.")
+            print("  ⚠ 문서 색인이 없습니다. uv run python scripts/index_knowledge.py 를 먼저 실행하세요.")
         try:
+            setup_step(4, "Tool 모으기", "내장 Tool은 코드와 스킬, 문서 색인에서, MCP Tool은 MCP_CONFIG 파일의 서버에서")
             registry = build_registry(args, stack, skills=skills, knowledge=knowledge)
-            for warning in team.check(registry.tools()):  # 하위 에이전트에 쓰기 Tool이 있으면 시작하지 않는다(C12 D2).
-                print(f"⚠ {warning}")
+            print(f"  → 합계 {len(registry.tools())}개")
+            setup_step(5, "에이전트 Tool 검사", "AGENT.md의 tools와 4단계의 Tool을 맞춰 본다")
+            print("  - 맡길 수 있는 에이전트(delegate: true)에 쓰기 Tool이 없는지(있으면 시작하지 않는다)")
+            print("  - AGENT.md에 이름으로 적은 Tool이 모두 연결됐는지(없으면 그 Tool 없이 쓴다)")
+            warnings = team.check(registry.tools())  # 하위 에이전트에 쓰기 Tool이 있으면 시작하지 않는다(C12 D2).
+            for warning in warnings:
+                print(f"  ⚠ {warning}")
+            if not warnings:
+                print("  → 문제 없음")
         except ValueError as e:  # 설정 파일 오류, Tool 이름 겹침, 하위 에이전트의 쓰기 Tool 등
             raise SystemExit(f"설정 오류: {e}")
         audit = AuditLog(AUDIT_PATH)
@@ -195,25 +228,33 @@ def main():
             llm_config=llm_config,
             tools=[progress.wrap_tool(t) for t in registry.tools()],
             max_steps=args.max_steps,
-            llm=llm,
+            llm=call_llm,  # 에이전트마다 AgentTeam이 진행 줄로 감싼다(wrap_llm).
             approve=lambda call: ask_in_terminal(call, interactive=sys.stdin.isatty(), notice=safety.notice()),
             audit=audit,
             tracer=Tracer(TRACE_DIR if env_bool("TRACE_ENABLED", True) else None),
         )
+        policy_path = env_str("SAFETY_CONFIG", "")
+        setup_step(6, "안전 정책", policy_path or "SAFETY_CONFIG 없음")
         try:  # Safety는 항상 켠다. 안전 정책 파일만 SAFETY_CONFIG로 고른다(C11 D17, D25).
-            policy_path = env_str("SAFETY_CONFIG", "")
             if policy_path and not Path(policy_path).is_file():
-                print(f"⚠ 안전 정책 파일이 없어 정책 없이 시작합니다: {policy_path} (safety.example.json을 복사하세요)")
+                print(f"  ⚠ 안전 정책 파일이 없어 정책 없이 시작합니다: {policy_path} (safety.example.json을 복사하세요)")
                 policy_path = ""
             policy = load_safety_policy(policy_path) if policy_path else None
             config, safety = with_safety(config, policy=policy, on_block=progress.blocked)
         except (OSError, ValueError) as e:
             raise SystemExit(f"안전 정책 설정 오류: {e}")
+        print("  Tool마다 막을지(deny), 실행 전에 승인을 받을지(ask), 쓸 수 있는 경로를 정한다")
         if policy:
-            print(f"안전 정책을 적용했습니다({policy_path}, Tool {len(policy.rules)}개).")
+            for name, rule in policy.rules.items():
+                print(f"  {name}: {RULE_MODE.get(rule.mode, rule.mode)}" + (f", 경로 {', '.join(rule.paths)}만" if rule.paths else ""))
+            print(f"  → 적용: Tool {len(policy.rules)}개에 규칙")
+        else:
+            print("  → 정책 없음(항상 켜진 Safety 검사만)")
         hooks_path = env_str("HOOKS_CONFIG", "")
+        setup_step(7, "Hook", hooks_path or "HOOKS_CONFIG 없음")
+        print("  Tool 실행 전후, 답을 내기 전에 사용자가 정한 명령을 실행한다")
         if hooks_path and not Path(hooks_path).is_file():
-            print(f"⚠ Hook 설정 파일이 없어 Hook 없이 시작합니다: {hooks_path} (hooks.example.json을 복사하세요)")
+            print(f"  ⚠ Hook 설정 파일이 없어 Hook 없이 시작합니다: {hooks_path} (hooks.example.json을 복사하세요)")
             hooks_path = ""
         if hooks_path:  # 사용자가 설치한 Hook(C11 D20)
             try:
@@ -225,7 +266,11 @@ def main():
                 )
             except (OSError, ValueError) as e:
                 raise SystemExit(f"Hook 설정 오류: {e}")
-            print(f"Hook {len(config.hooks.specs)}개를 설치했습니다({hooks_path}).")
+        if hooks_path:
+            for spec in config.hooks.specs:
+                print(f"  {spec.event}" + (f"(Tool {spec.match})" if spec.event != "after_answer" else "") + f": {' '.join(spec.command)}")
+        print(f"  → 설치: {len(config.hooks.specs)}개" if hooks_path else "  → 없음")
+        print(BAR)
         session = Session(team.config_for(MAIN, config, skills=skills, memory=memory.items()))
         ctx = CommandContext(
             session=session,
@@ -239,7 +284,7 @@ def main():
             keep_turns=env_int("COMPACT_KEEP_TURNS", 4),
             compact_warn_tokens=env_int("COMPACT_WARN_TOKENS", 100_000),
             memory_warn_tokens=env_int("MEMORY_WARN_TOKENS", 2_000),
-            workflows=make_workflows(stack, session.config, knowledge, progress.workflow_step),
+            workflows=make_workflows(stack, session.config, knowledge, progress.workflow_step, team=team, base=config),
             agents=team,
         )
         repl(session, ctx, progress, stream, safety)
@@ -250,13 +295,18 @@ def build_registry(args, stack: ExitStack, *, skills: list[SkillMeta], knowledge
     registry = ToolRegistry(max_result_chars=env_int("TOOL_RESULT_MAX_CHARS", DEFAULT_MAX_RESULT_CHARS))
     for source, tool in make_builtin_tools(skills=skills, knowledge=knowledge):
         registry.add(tool, source=source)
+    print("  내장 Tool")
+    for source, label in TOOL_SOURCE.items():
+        found = [t.name for t in registry.tools() if registry.source_of(t.name) == source]
+        if found:
+            print(f"    {label}: {names(found)}")
 
     config_path = args.mcp_config or env_str("MCP_CONFIG", "")  # 우선순위: 인자 > 환경 변수 > 사용 안 함
     if config_path:
         from ai_agent_dock.core.tools.mcp import connect_mcp_servers, load_config  # MCP SDK는 설정했을 때만 가져온다.
 
         servers = load_config(config_path)
-        print(f"MCP 서버 {len(servers)}개에 연결합니다(처음 실행은 패키지를 내려받느라 오래 걸릴 수 있습니다)...", flush=True)
+        print(f"  MCP Tool: {config_path}의 켜진 서버 {len(servers)}개에 연결합니다(처음 실행은 패키지를 내려받느라 오래 걸릴 수 있습니다)...", flush=True)
         connected = stack.enter_context(
             connect_mcp_servers(
                 servers,
@@ -266,17 +316,22 @@ def build_registry(args, stack: ExitStack, *, skills: list[SkillMeta], knowledge
         )
         for server, tools in connected.items():
             registry.add_all(tools, source=f"mcp:{server}")
-            print(f"  MCP 서버 {server}: Tool {len(tools)}개 연결됨")
+            print(f"    서버 {server}: {names([t.name for t in tools])}")
+    else:
+        print("  MCP Tool: MCP_CONFIG가 없어 연결하지 않습니다")
     return registry
 
 
-def make_workflows(stack: ExitStack, config: AgentConfig, knowledge: Knowledge | None, progress) -> WorkflowRunner:
-    """워크플로 실행기. 체크포인트는 data/checkpoints.sqlite에 저장한다(서비스에서는 C12에서 Postgres로 바꾼다)."""
+def make_workflows(stack: ExitStack, config: AgentConfig, knowledge: Knowledge | None, progress, *, team: AgentTeam, base: AgentConfig) -> WorkflowRunner:
+    """워크플로 실행기. 체크포인트는 data/checkpoints.sqlite에 저장한다(서비스에서는 C12에서 Postgres로 바꾼다).
+
+    config는 main 설정, base는 모든 에이전트가 함께 쓰는 설정이다. routing은 team과 base로 경로마다 에이전트를 만든다(C14).
+    """
     CHECKPOINT_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(CHECKPOINT_PATH, check_same_thread=False)
     stack.callback(conn.close)
     max_revisions = env_int("WORKFLOW_MAX_REVISIONS", 2)
-    context = WorkflowContext(config=config, knowledge=knowledge, max_revisions=max_revisions, progress=progress)
+    context = WorkflowContext(config=config, knowledge=knowledge, max_revisions=max_revisions, progress=progress, team=team, base=base)
     return WorkflowRunner(WORKFLOWS, context, SqliteSaver(conn))
 
 

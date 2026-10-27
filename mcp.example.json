@@ -15,7 +15,7 @@
         "@modelcontextprotocol/server-filesystem",
         "data/sandbox"
       ],
-      "trusted": false,
+      "trusted": true,
       "enabled": true
     },
     "web": {
@@ -32,7 +32,7 @@
         "tavily_extract"
       ],
       "trusted": true,
-      "enabled": false
+      "enabled": true
     }
   }
 }

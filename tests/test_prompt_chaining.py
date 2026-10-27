@@ -39,7 +39,8 @@ def run(responses):
 def test_gate_checks_item_count_citations_and_searched_sources():
     seen = {CITE}
     assert gate_problem(OUTLINE, seen) == ""
-    assert gate_problem(f"- 하나 [{CITE}]\n- 둘 [{CITE}]", seen) == "개요 항목 2개(3~5개여야 한다)"
+    assert gate_problem(f"- 하나 [{CITE}]\n- 둘 [{CITE}]", seen) == ""  # 2개는 통과
+    assert gate_problem(f"- 하나 [{CITE}]", seen) == "개요 항목 1개(2~5개여야 한다)"
     assert gate_problem(f"- 하나 [{CITE}]\n- 둘\n1. 셋 [{CITE}]", seen) == "출처 없는 항목 1개"
     assert gate_problem(OUTLINE, set()) == f"검색에 없던 출처: {CITE}"
 

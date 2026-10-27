@@ -36,6 +36,7 @@ class SessionStats:
     hooks: int = 0  # 사용자 Hook 실행 수(C11 D21)
     agents: dict[str, list[int]] = field(default_factory=dict)  # 에이전트 이름 → [LLM 호출, 입력 토큰, 출력 토큰](C12 F4)
     delegations: int = 0  # delegate 호출 수
+    models: dict[str, list[int]] = field(default_factory=dict)  # 모델("제공자:모델") → [LLM 호출, 입력 토큰, 출력 토큰](C14 Q9)
 
     def total(self, name: str) -> float:
         return sum(getattr(t, name) for t in self.turns)
@@ -56,6 +57,7 @@ def session_stats(session: str, lines: list[dict]) -> SessionStats:
     safety: dict[str, int] = {}
     hooks = delegations = 0
     agents: dict[str, list[int]] = {}
+    models: dict[str, list[int]] = {}
     model = None
     for line in lines:
         kind = line["kind"]
@@ -65,11 +67,12 @@ def session_stats(session: str, lines: list[dict]) -> SessionStats:
         if kind == "delegate":
             delegations += 1
             continue
-        if kind == "llm":  # 하위 에이전트의 호출도 그 턴에 더하고, 에이전트별로도 따로 센다.
-            counts = agents.setdefault(line.get("agent") or "main", [0, 0, 0])
-            counts[0] += 1
-            counts[1] += line.get("input_tokens") or 0
-            counts[2] += line.get("output_tokens") or 0
+        if kind == "llm":  # 하위 에이전트의 호출도 그 턴에 더하고, 에이전트별, 모델별로도 따로 센다.
+            # C14 전의 기록에는 model이 없다. 그때는 세션의 대화 모델로 센다.
+            for counts in (agents.setdefault(line.get("agent") or "main", [0, 0, 0]), models.setdefault(line.get("model") or str(model), [0, 0, 0])):
+                counts[0] += 1
+                counts[1] += line.get("input_tokens") or 0
+                counts[2] += line.get("output_tokens") or 0
         if kind == "safety":
             safety[line.get("check", "?")] = safety.get(line.get("check", "?"), 0) + 1
             continue
@@ -99,6 +102,7 @@ def session_stats(session: str, lines: list[dict]) -> SessionStats:
         hooks=hooks,
         agents=agents,
         delegations=delegations,
+        models=models,
     )
 
 
@@ -130,6 +134,9 @@ def format_session(s: SessionStats) -> str:
     if s.delegations:  # 위임이 있던 세션만 에이전트별로 나눠 보여 준다(C12 F4).
         rows.append(f"  위임: {s.delegations}번")
         rows += [f"    {name}: LLM {llm}, 입력 {tin:,}, 출력 {tout:,}" for name, (llm, tin, tout) in s.agents.items()]
+    if len(s.models) > 1:  # 에이전트마다 모델이 다른 세션(예: routing)만 모델별로 나눠 보여 준다(C14 Q9).
+        rows.append("  모델별:")
+        rows += [f"    {name}: LLM {llm}, 입력 {tin:,}, 출력 {tout:,}" for name, (llm, tin, tout) in s.models.items()]
     return "\n".join(rows)
 
 

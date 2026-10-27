@@ -43,6 +43,7 @@ class Case:
     forbid_executed: list[str] = field(default_factory=list)  # 실행되면 안 되는 툴. 요청은 해도 정책이나 승인으로 막혔으면 통과(C11)
     knowledge: str | None = None  # "fixtures"면 평가 전용 문서 색인을 쓴다(C11 D14). 실행기가 쓴다.
     expect_delegate: bool | None = None  # True면 main이 delegate를 불러야 하고, False면 부르면 안 된다(C12 F6). None이면 보지 않는다.
+    expect_route: str | None = None  # routing 워크플로가 골라야 할 경로(C14 Q8)
 
 
 def load_cases(path: Path) -> list[Case]:
@@ -121,9 +122,11 @@ def check(case: Case, result: AgentResult, children: Iterable[AgentResult] = ())
     return failures
 
 
-def check_workflow(case: Case, status: str, revisions: int) -> list[str]:
-    """워크플로 케이스의 마지막 상태와 고쳐 쓴 횟수를 본다(C10 D22)."""
+def check_workflow(case: Case, status: str, revisions: int, route: str | None = None) -> list[str]:
+    """워크플로 케이스의 마지막 상태, 고쳐 쓴 횟수, 고른 경로를 본다(C10 D22, C14 Q8)."""
     failures = []
+    if case.expect_route and route != case.expect_route:
+        failures.append(f"경로가 {case.expect_route}이 아니라 {route}이었다")
     if case.expect_status and status != case.expect_status:
         failures.append(f"워크플로가 {case.expect_status}가 아니라 {status}로 끝났다")
     if case.expect_max_revisions is not None and revisions > case.expect_max_revisions:

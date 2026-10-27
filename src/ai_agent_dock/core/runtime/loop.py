@@ -63,6 +63,7 @@ def run_agent(config: AgentConfig, question: str, *, history: list[Message] | No
                 "llm",
                 step,
                 _ms_since(started),
+                model=f"{config.llm_config.provider}:{config.llm_config.model}",  # 에이전트마다 모델이 다를 수 있다(C14 Q9).
                 text=response.text,
                 tool_calls=[{"name": c.name, "arguments": c.arguments} for c in response.tool_calls],
                 input_tokens=response.input_tokens,

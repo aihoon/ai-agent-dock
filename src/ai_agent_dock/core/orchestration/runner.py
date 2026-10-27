@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import StateGraph
@@ -19,6 +20,9 @@ from ..observability import new_session_id
 from ..retrieval import Knowledge
 from ..runtime.loop import run_agent
 from ..runtime.types import AgentConfig
+
+if TYPE_CHECKING:
+    from ..agents import AgentTeam
 
 WAITING = "waiting"  # 사람 승인에서 멈춘 상태. 나머지 상태(approved, rejected, no_evidence)는 워크플로가 정한다.
 SHOW = 200  # 추적 기록에 노드 결과를 이만큼만 남긴다(전체 답은 에이전트의 llm 줄에 있다).
@@ -32,6 +36,8 @@ class WorkflowContext:
     knowledge: Knowledge | None = None
     max_revisions: int = 2  # WORKFLOW_MAX_REVISIONS(C10 D8)
     progress: Callable[[str], None] = lambda message: None  # 노드가 알리는 진행 줄(C10 D24). 응용이 화면에 보여 준다.
+    team: AgentTeam | None = None  # 에이전트 정의. 노드마다 다른 에이전트를 쓰는 워크플로(C14 routing)가 쓴다.
+    base: AgentConfig | None = None  # 모든 에이전트가 함께 쓰는 설정(설치된 전체 Tool, 승인, Safety, 추적). team.config_for에 넘긴다.
 
 
 @dataclass(frozen=True)
@@ -54,6 +60,7 @@ class Outcome:
     draft: str | None = None  # 승인 대기일 때 보여 줄 초안
     revisions: int = 0
     started: str = ""
+    route: str | None = None  # routing 워크플로가 고른 경로(C14). 평가가 expect_route와 비교한다.
 
 
 def ask_agent(config: AgentConfig, prompt: str) -> str:
@@ -142,6 +149,7 @@ class WorkflowRunner:
             draft=snapshot.interrupts[0].value.get("draft") if waiting else None,
             revisions=values.get("revisions", 0),
             started=values.get("started", ""),
+            route=values.get("route"),
         )
 
 

@@ -17,7 +17,7 @@ from ..core.orchestration import Workflow, WorkflowContext, ask_agent
 from ..core.retrieval import check_citations, make_search_docs_tool
 from .answer_check import EXCLUDED_TOOLS, unavailable
 
-MIN_ITEMS, MAX_ITEMS = 3, 5  # 개요 항목 수(Q3)
+MIN_ITEMS, MAX_ITEMS = 2, 5  # 개요 항목 수(Q3). 짧은 문서는 2개가 자연스러워 C14에서 3을 2로 내렸다
 ITEM = re.compile(r"^\s*(?:[-*]|\d+[.)])\s+(.+)$")  # 줄 머리의 -, *, 1. 을 항목으로 센다
 
 

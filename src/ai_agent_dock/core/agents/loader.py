@@ -1,7 +1,8 @@
 """에이전트 정의 읽기: agents/<이름>/AGENT.md를 찾고, 머리말을 검사하고, Tool 패턴을 고르고, 에이전트 목록 문장을 만든다.
 
-형식은 스킬(SKILL.md)과 같다. 머리말: name, description, tools, max_steps(생략 가능). 본문: 역할 지침.
-tools는 [a, b] 또는 a, b로 쓴다. "*"는 모든 Tool, "!web__*"처럼 !로 시작하면 제외다.
+형식은 스킬(SKILL.md)과 같다. 머리말: name, description, model, tools, delegate, max_steps. 본문: 역할 지침.
+여섯 항목을 모두 적고, 쓰지 않는 값은 비워 둔다(C14). 빈 model은 대화 모델, 빈 delegate는 false, 빈 max_steps는 기본값이다.
+tools는 비울 수 없다. [a, b] 또는 a, b로 쓴다. "*"는 모든 Tool, "!web__*"처럼 !로 시작하면 제외다. []는 Tool 없음이다.
 """
 
 from __future__ import annotations
@@ -10,7 +11,7 @@ from collections.abc import Iterable
 from fnmatch import fnmatchcase
 from pathlib import Path
 
-from ..llm import Tool
+from ..llm import Tool, parse_model
 from ..skills.loader import NAME_MAX_LENGTH, NAME_PATTERN, split_frontmatter
 from ..skills.types import SkillFormatError
 from .types import AgentSpec, AgentFormatError
@@ -69,12 +70,22 @@ def _read(path: Path, folder_name: str) -> AgentSpec:
         raise AgentFormatError(f"{path}: name {name!r}은 소문자, 숫자, 하이픈만 쓰고 64자 이하여야 한다")
     if name != folder_name:
         raise AgentFormatError(f"{path}: name {name!r}이 폴더 이름 {folder_name!r}과 같아야 한다")
-    tools = tuple(t.strip().strip("\"'") for t in fields.get("tools", "").strip().strip("[]").split(",") if t.strip())
-    if not tools:
-        raise AgentFormatError(f"{path}: 머리말에 tools가 없다(모든 Tool이면 \"*\")")
-    max_steps = fields.get("max_steps")
+    raw_tools = fields.get("tools", "").strip()
+    if not raw_tools:  # 빠뜨린 것과 일부러 비운 것(tools: [])을 구분한다(C14 Q2-4).
+        raise AgentFormatError(f"{path}: 머리말에 tools가 없다(모든 Tool이면 \"*\", Tool이 없으면 [])")
+    tools = tuple(t.strip().strip("\"'") for t in raw_tools.strip("[]").split(",") if t.strip())
+    max_steps = fields.get("max_steps") or None  # 비우면 기본값(AGENT_MAX_STEPS, SUBAGENT_MAX_STEPS)
     if max_steps is not None and (not max_steps.isdigit() or int(max_steps) < 1):
         raise AgentFormatError(f"{path}: max_steps는 1 이상의 정수여야 한다: {max_steps!r}")
+    model = fields.get("model") or None
+    if model:
+        try:
+            parse_model(model)
+        except ValueError as e:
+            raise AgentFormatError(f"{path}: {e}") from None
+    delegate = fields.get("delegate", "").lower()  # 비우거나 없으면 false: 맡길 수 있는 에이전트만 true로 적는다.
+    if delegate not in ("true", "false", ""):
+        raise AgentFormatError(f"{path}: delegate는 true, false 또는 빈 값이어야 한다: {delegate!r}")
     if not body.strip():
         raise AgentFormatError(f"{path}: 본문(역할 지침)이 비어 있다")
     return AgentSpec(
@@ -84,4 +95,6 @@ def _read(path: Path, folder_name: str) -> AgentSpec:
         body=body.strip(),
         path=path,
         max_steps=int(max_steps) if max_steps else None,
+        model=model,
+        delegate=delegate == "true",
     )

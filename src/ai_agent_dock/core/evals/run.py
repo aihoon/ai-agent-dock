@@ -104,7 +104,7 @@ def run_workflow_case(case: Case, runner: WorkflowRunner) -> tuple[list[str], st
     while result.status == WAITING:
         result = runner.resume(result.run_id, decisions.pop(0) if decisions else "approve")
     answer = AgentResult(answer=result.answer, status="completed", steps=0, history=[])
-    return check(case, answer) + check_workflow(case, result.status, result.revisions), result.answer
+    return check(case, answer) + check_workflow(case, result.status, result.revisions, result.route), result.answer
 
 
 def last_passed(directory: Path) -> set[str] | None:

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 from functools import cache
 from importlib import import_module
 from types import ModuleType
@@ -37,6 +38,23 @@ def config_from_env(provider: str | None = None) -> LLMConfig:
     제공자 우선순위: provider 인자 > 환경 변수 LLM_PROVIDER > 기본값 openai.
     """
     return _provider(provider or env_str("LLM_PROVIDER", "openai")).config_from_env()
+
+
+def parse_model(spec: str) -> tuple[str, str]:
+    """'제공자:모델'(예: openai:gpt-6-luna)을 (제공자, 모델)로 나눈다. 형식이 틀리거나 없는 제공자면 ValueError(C14 Q3)."""
+    provider, sep, model = spec.partition(":")
+    if not sep or not model.strip() or provider not in _PROVIDERS:
+        raise ValueError(f"모델은 '제공자:모델'로 쓴다(제공자: {', '.join(_PROVIDERS)}): {spec!r}")
+    return provider, model.strip()
+
+
+def model_config(spec: str, base: LLMConfig) -> LLMConfig:
+    """에이전트나 경로가 고른 모델의 설정. 제공자가 base와 같으면 base의 나머지 값(출력 한도)을 그대로 쓴다.
+
+    다른 제공자면 그 제공자의 환경 변수로 설정을 만든다(그 제공자의 API 키가 .env에 있어야 한다).
+    """
+    provider, model = parse_model(spec)
+    return replace(base if provider == base.provider else config_from_env(provider), model=model)
 
 
 def call_llm(request: LLMRequest, on_text_delta: Callable[[str], None] | None = None) -> LLMResponse:
