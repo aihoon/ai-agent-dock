@@ -44,6 +44,8 @@ class Case:
     knowledge: str | None = None  # "fixtures"면 평가 전용 문서 색인을 쓴다(C11 D14). 실행기가 쓴다.
     expect_delegate: bool | None = None  # True면 main이 delegate를 불러야 하고, False면 부르면 안 된다(C12 F6). None이면 보지 않는다.
     expect_route: str | None = None  # routing 워크플로가 골라야 할 경로(C14 Q8)
+    expect_routes: list[str] | None = None  # sectioning이 골라야 할 경로들. 순서는 보지 않는다(C15)
+    expect_verdict: str | None = None  # voting의 판정: injection, clean, unsure(C15)
 
 
 def load_cases(path: Path) -> list[Case]:
@@ -122,11 +124,17 @@ def check(case: Case, result: AgentResult, children: Iterable[AgentResult] = ())
     return failures
 
 
-def check_workflow(case: Case, status: str, revisions: int, route: str | None = None) -> list[str]:
-    """워크플로 케이스의 마지막 상태, 고쳐 쓴 횟수, 고른 경로를 본다(C10 D22, C14 Q8)."""
+def check_workflow(
+    case: Case, status: str, revisions: int, route: str | None = None, *, routes: list[str] | None = None, verdict: str | None = None
+) -> list[str]:
+    """워크플로 케이스의 마지막 상태, 고쳐 쓴 횟수, 고른 경로, 판정을 본다(C10 D22, C14 Q8, C15)."""
     failures = []
     if case.expect_route and route != case.expect_route:
         failures.append(f"경로가 {case.expect_route}이 아니라 {route}이었다")
+    if case.expect_routes is not None and sorted(routes or []) != sorted(case.expect_routes):
+        failures.append(f"경로가 {sorted(case.expect_routes)}이 아니라 {sorted(routes or [])}이었다")
+    if case.expect_verdict and verdict != case.expect_verdict:
+        failures.append(f"판정이 {case.expect_verdict}이 아니라 {verdict}였다")
     if case.expect_status and status != case.expect_status:
         failures.append(f"워크플로가 {case.expect_status}가 아니라 {status}로 끝났다")
     if case.expect_max_revisions is not None and revisions > case.expect_max_revisions:

@@ -106,3 +106,7 @@ def test_refresh_reads_subfolders_and_keeps_them_apart_by_path(tmp_path):
     report = index.refresh(tmp_path)
 
     assert report.added == 2 and index.stats() == (2, 2)
+
+
+def test_to_markdown_drops_bold_marks_from_headings_only():  # 출처의 소제목에 **가 남지 않게(C15 Q24)
+    assert to_markdown("## **C4. Tool 레이어와 MCP**\n본문의 **굵게**는 남긴다") == "## C4. Tool 레이어와 MCP\n본문의 **굵게**는 남긴다\n"

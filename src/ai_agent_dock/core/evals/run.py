@@ -12,7 +12,7 @@ from pathlib import Path
 
 from ..hitl import Approval
 from ..llm import Message, ToolCall
-from ..orchestration import WAITING, WorkflowRunner
+from ..orchestration import WAITING, Outcome, WorkflowRunner
 from ..runtime.loop import run_agent
 from ..runtime.types import AgentResult, AgentConfig
 from .score import Case, called_tools, check, check_workflow
@@ -27,6 +27,7 @@ class CaseResult:
     failures: list[str] = field(default_factory=list)  # 마지막으로 실패한 실행의 이유
     tools: list[str] = field(default_factory=list)  # 마지막 실행에서 부른 Tool
     answer: str | None = None  # 마지막 실행의 답
+    verdicts: list[str] = field(default_factory=list)  # voting 실행마다 "판정 (표 1, 표 2, 표 3)". 판정자 1번과 다수결의 흔들림을 비교한다(C15).
 
     @property
     def passed(self) -> bool:
@@ -72,7 +73,10 @@ def evaluate(
     for _ in range(repeat):
         config = make_config(case)
         if case.workflow:
-            failures, outcome.answer = run_workflow_case(case, workflows(config))
+            failures, result = run_workflow_case(case, workflows(config))
+            outcome.answer = result.answer
+            if result.verdict:
+                outcome.verdicts.append(f"{result.verdict} ({', '.join(result.ballots or [])})")
             if failures:
                 outcome.failures = failures
             else:
@@ -97,14 +101,15 @@ def evaluate(
     return outcome
 
 
-def run_workflow_case(case: Case, runner: WorkflowRunner) -> tuple[list[str], str | None]:
-    """(어긋난 규칙, 최종 답). 판정은 최종 답과 마지막 상태, 고쳐 쓴 횟수로 한다."""
+def run_workflow_case(case: Case, runner: WorkflowRunner) -> tuple[list[str], Outcome]:
+    """(어긋난 규칙, 워크플로 결과). 판정은 최종 답과 마지막 상태, 고쳐 쓴 횟수, 고른 경로, 판정으로 한다."""
     decisions = list(case.workflow_decisions)
     result = runner.start(case.workflow, case.question)
     while result.status == WAITING:
         result = runner.resume(result.run_id, decisions.pop(0) if decisions else "approve")
     answer = AgentResult(answer=result.answer, status="completed", steps=0, history=[])
-    return check(case, answer) + check_workflow(case, result.status, result.revisions, result.route), result.answer
+    failures = check_workflow(case, result.status, result.revisions, result.route, routes=result.routes, verdict=result.verdict)
+    return check(case, answer) + failures, result
 
 
 def last_passed(directory: Path) -> set[str] | None:

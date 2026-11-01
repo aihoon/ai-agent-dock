@@ -58,6 +58,7 @@ def _clean(text: str) -> str:
     text = re.sub(r"<table\b[^>]*>(.*?)</table>", _table, text, flags=re.S)
     text = re.sub(r'[ \t]*\{(?:color|toggle)="[^}]*\}', "", text)  # 블록 색, 토글 표시
     text = TAG.sub("", text)
+    text = re.sub(r"^#+ .*$", lambda m: m.group(0).replace("**", ""), text, flags=re.M)  # 소제목은 출처가 된다. 굵게 표시를 뺀다(C15 Q24)
     return "\n".join(line.rstrip().lstrip("\t") for line in text.split("\n"))
 
 

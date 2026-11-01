@@ -3,6 +3,7 @@
 import json
 import re
 import sys
+from types import SimpleNamespace
 from pathlib import Path
 
 from fakes import TEST_CONFIG, FakeLLM, final
@@ -127,3 +128,17 @@ def test_switched_sessions_get_their_own_session_start(tmp_path):
         assert "session_start" in kinds, path
     kinds = [json.loads(line)["kind"] for line in first.read_text(encoding="utf-8").splitlines()]
     assert kinds.count("session_start") == 2 and "session_resume" in kinds
+
+
+def test_progress_counts_steps_per_agent_until_the_next_turn(capsys):  # 동시에 도는 가지의 스텝이 섞이지 않는다(C15 Q25)
+    sys.path.insert(0, str(EXAMPLES))
+    import chat
+
+    progress = chat.Progress()
+    request = SimpleNamespace(config=SimpleNamespace(provider="p", model="m"))
+    docs, web = (progress.wrap_llm(name, lambda r, on_text_delta=None: None) for name in ("docs", "web"))
+    docs(request), web(request), progress.workflow_step("docs 완료"), web(request)
+    progress.begin_turn()
+    docs(request)
+    out = capsys.readouterr().out
+    assert [line.split("(")[1].split(",")[0] for line in out.splitlines() if "모델 호출" in line] == ["스텝 1", "스텝 1", "스텝 2", "스텝 1"]

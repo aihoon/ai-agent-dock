@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import sqlite3
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -18,7 +19,9 @@ DEFAULT_THRESHOLD = 0.3  # 시작점. 점수가 이보다 낮은 조각은 관�
 
 class KnowledgeIndex:
     def __init__(self, db_path: str | Path, embedder: Embedder):
-        self._db = sqlite3.connect(str(db_path))
+        # 워크플로 가지(C15 sectioning)는 다른 스레드에서 동시에 검색한다. 연결 하나를 잠금으로 나눠 쓴다.
+        self._db = sqlite3.connect(str(db_path), check_same_thread=False)
+        self._lock = threading.Lock()
         self._embedder = embedder
         columns = [row[1] for row in self._db.execute("PRAGMA table_info(chunks)")]
         if columns and "title" not in columns:
@@ -69,7 +72,8 @@ class KnowledgeIndex:
     def search(self, query: str, top_k: int = 3, threshold: float = DEFAULT_THRESHOLD) -> list[Hit]:
         """질문과 가까운 조각을 점수 순으로 돌려준다. 임계값보다 낮은 조각은 뺀다."""
         [query_vector] = self._embedder.embed([query])
-        rows = self._db.execute("SELECT title, section, text, vector FROM chunks").fetchall()
+        with self._lock:
+            rows = self._db.execute("SELECT title, section, text, vector FROM chunks").fetchall()
         hits = []
         for title, section, text, vector in rows:
             score = _cosine(query_vector, json.loads(vector))

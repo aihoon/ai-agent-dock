@@ -17,7 +17,7 @@ from ai_agent_dock.core.orchestration import WorkflowContext, WorkflowRunner
 from ai_agent_dock.core.runtime.loop import run_agent
 from ai_agent_dock.core.runtime.types import AgentConfig
 from ai_agent_dock.workflows import WORKFLOWS
-from ai_agent_dock.workflows.routing import ROUTES, pick, router_prompt
+from ai_agent_dock.workflows.routing import ROUTES, read_route, router_prompt
 
 AGENTS = Path(__file__).resolve().parent.parent / "agents"
 SCHEMA = {"type": "object", "properties": {"q": {"type": "string"}}}
@@ -118,10 +118,10 @@ def test_only_narrows_agent_tools_and_drops_delegate():
 # --- 경로 고르기 (Q4) ---
 
 
-def test_pick_normalizes_case_space_quotes_and_periods_only():
-    assert pick(" Web.") == "web" and pick('"DOCS"') == "docs" and pick("utility\n") == "utility"
+def test_read_route_normalizes_case_space_quotes_and_periods_only():
+    assert read_route(" Web.") == "web" and read_route('"DOCS"') == "docs" and read_route("utility\n") == "utility"
     for label in ["경로: web", "web 경로가 맞습니다", "search", ""]:
-        assert pick(label) is None
+        assert read_route(label) is None
 
 
 def test_router_prompt_lists_all_routes_and_the_question():

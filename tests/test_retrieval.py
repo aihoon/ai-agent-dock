@@ -1,5 +1,7 @@
 """지식 검색 테스트: 청킹, 색인 갱신, 검색 임계값, 출처 검사, search_docs Tool. 네트워크는 쓰지 않는다."""
 
+from concurrent.futures import ThreadPoolExecutor
+
 from ai_agent_dock.core.retrieval import (
     HashingEmbedder,
     KnowledgeIndex,
@@ -145,6 +147,21 @@ def test_citation_check_ignores_how_many_spaces_are_between_words():  # Notion �
     assert check.unknown == []
 
 
+def test_citation_check_ignores_bold_marks():  # Notion 소제목의 **를 모델은 빼고 쓴다(C15 Q24)
+    check = check_citations("답 [AI Agent Dock, C4. Tool 레이어와 MCP]", {"AI Agent Dock, **C4. Tool 레이어와 MCP**"})
+    assert check.unknown == []
+
+
+def test_citation_check_splits_sources_joined_with_semicolons():  # 모델은 [가, 1절; 나, 2절]처럼 묶어 쓰기도 한다(C15)
+    check = check_citations("답 [가, 1절; 나, 2절] [다, 3절]", {"가, 1절", "나, 2절"})
+    assert check.cited == ["가, 1절", "나, 2절", "다, 3절"] and check.unknown == ["다, 3절"]
+
+
+def test_citation_check_skips_markdown_links():  # 웹 출처 [제목, 날짜](URL)는 문서 출처가 아니다(C15 5.1)
+    check = check_citations("답 [규격 발표, 2026-07-28](https://x.dev) [Tool 정의, 인자]", {"Tool 정의, 인자"})
+    assert check.cited == ["Tool 정의, 인자"] and check.unknown == []
+
+
 def test_citation_check_passes_when_no_citation_is_written():
     check = check_citations("출처 없는 답", set())
 
@@ -213,3 +230,14 @@ def test_open_does_not_embed_documents(tmp_path):
     assert embedder.calls == 0  # 열 때는 문서를 임베딩하지 않는다
     assert (knowledge.files, knowledge.chunks) == (1, 1)
     assert knowledge.seen == set()
+
+
+def test_search_works_from_other_threads_at_once(tmp_path):  # sectioning 가지는 다른 스레드에서 동시에 검색한다(C15)
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    write_doc(docs, "a.md", "# 가\n## 소개\nMCP는 Tool을 연결하는 규약이다.")
+    index = KnowledgeIndex(tmp_path / "index.sqlite", HashingEmbedder())
+    index.refresh(docs)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(lambda _: index.search("MCP 규약", threshold=0.0), range(8)))
+    assert all(r and r[0].cite == "가, 소개" for r in results)

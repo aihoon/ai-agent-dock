@@ -82,13 +82,12 @@ class Progress:
     """
 
     def __init__(self):
-        self.step = 0
+        self.steps: dict[str, int] = {}  # 에이전트(가지) 이름 → 이번 턴의 스텝 번호. 동시에 도는 가지가 섞이지 않게 따로 센다(C15 Q25).
         self.open = False  # 글자 조각을 출력하다 줄바꿈을 아직 못 한 상태
         self.indent = ""  # 하위 에이전트의 진행 줄은 들여 쓴다(C12 F5).
-        self.outer_steps: list[int] = []  # 맡기기 전 부모의 스텝 번호
 
     def begin_turn(self):
-        self.step = 0
+        self.steps = {}
 
     def end_line(self):
         """출력 중인 글자 줄이 있으면 줄바꿈으로 끝낸다."""
@@ -108,13 +107,11 @@ class Progress:
         """하위 에이전트에게 맡길 때(C12 F5). 하위 에이전트의 스텝은 1부터 새로 센다."""
         preview = task.replace("\n", " ")
         self._say(f"  → {name}에게 맡김: {preview[:TASK_PREVIEW]}{'…' if len(preview) > TASK_PREVIEW else ''}")
-        self.outer_steps.append(self.step)
-        self.step = 0
+        self.steps.pop(name, None)  # 하위 에이전트는 맡길 때마다 1부터 센다.
         self.indent += "    "
 
     def delegate_end(self, name: str, result: AgentResult):
         self.indent = self.indent[:-4]
-        self.step = self.outer_steps.pop()
         self._say(f"  ← {name} 완료 (스텝 {result.steps}{', 스텝 상한에 걸림' if result.status == 'max_steps' else ''})")
 
     def say(self, message: str):
@@ -125,17 +122,16 @@ class Progress:
         self._say(f"  ⛔ 안전 정책으로 막았습니다: {name} ({reason})")
 
     def workflow_step(self, message: str):
-        """워크플로 노드가 알린 줄(C10 D24). 노드마다 스텝 번호를 새로 센다."""
-        self.begin_turn()
+        """워크플로 노드가 알린 줄(C10 D24). 스텝 번호는 에이전트별로 이어 센다(가지가 끝났다는 줄이 다른 가지의 번호를 지우지 않게, C15 Q25)."""
         self._say(f"▸ {message}")
 
     def wrap_llm(self, agent: str, llm):
         """AgentTeam이 에이전트마다 감싼다. 진행 줄에 어느 에이전트가 어느 모델을 부르는지 보인다(C14)."""
 
         def traced(request, on_text_delta=None):
-            self.step += 1
+            step = self.steps[agent] = self.steps.get(agent, 0) + 1
             model = f"{request.config.provider}:{request.config.model}"
-            self._say(f"  · [{agent}] 모델 호출 중 (스텝 {self.step}, {model})")
+            self._say(f"  · [{agent}] 모델 호출 중 (스텝 {step}, {model})")
             return llm(request, on_text_delta=on_text_delta)
 
         return traced

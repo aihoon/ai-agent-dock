@@ -61,6 +61,9 @@ class Outcome:
     revisions: int = 0
     started: str = ""
     route: str | None = None  # routing 워크플로가 고른 경로(C14). 평가가 expect_route와 비교한다.
+    routes: list[str] | None = None  # sectioning이 고른 경로들(C15). 평가가 expect_routes와 비교한다.
+    verdict: str | None = None  # voting의 판정(C15). 평가가 expect_verdict와 비교한다.
+    ballots: list[str] | None = None  # voting의 표 1~3. 평가가 판정자 1번과 다수결의 흔들림을 비교한다.
 
 
 def ask_agent(config: AgentConfig, prompt: str) -> str:
@@ -150,6 +153,9 @@ class WorkflowRunner:
             revisions=values.get("revisions", 0),
             started=values.get("started", ""),
             route=values.get("route"),
+            routes=values.get("routes"),
+            verdict=values.get("verdict"),
+            ballots=values.get("ballots"),
         )
 
 

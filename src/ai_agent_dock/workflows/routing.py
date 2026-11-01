@@ -7,37 +7,27 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
 from typing import TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
 from ..core.agents import MAIN
-from ..core.llm import model_config
 from ..core.orchestration import Workflow, WorkflowContext, ask_agent
+from .common import AgentSlot, clean_label, slot_config
 
 ROUTER = "router"
 FALLBACK = "general"
 
 
-@dataclass(frozen=True)
-class Route:
-    name: str
-    description: str  # router에게 보여 줄 설명
-    agent: str  # agents/<agent>/AGENT.md. 본문이 시스템 프롬프트가 된다.
-    model: str  # "제공자:모델". AGENT.md의 model보다 우선한다(Q3). ""이면 AGENT.md의 model
-    tools: tuple[str, ...]  # AGENT.md의 Tool 중 더 좁힐 패턴(교집합, Q2-3). ()이면 에이전트의 Tool 그대로(AGENT.md의 []와 달리 "Tool 없음"이 아니다)
-
-
 # 기본값을 두지 않는다. 경로마다 agent, model, tools를 모두 적고, 기본을 쓰면 ""와 ()로 비워 둔다.
-ROUTES = [
-    Route("chat", "인사, 일반 지식, 글 다듬기 같은 가벼운 대화. Tool이 필요 없다", agent="chat", model="", tools=()),
-    Route("docs", "이 프로젝트 문서에 있는 내용을 묻는 질문", agent=MAIN, model="", tools=("search_docs",)),
-    Route("web", "최신 정보, 뉴스, 외부 웹사이트 내용", agent="web", model="", tools=()),
-    Route("utility", "계산, 지금 시각과 날짜", agent=MAIN, model="openai:gpt-6-luna", tools=("calculate", "get_current_time")),
-    Route("files", "샌드박스 파일 읽기, 목록, 쓰기", agent=MAIN, model="", tools=("files__*",)),
+ROUTES = [  # 경로 표. sectioning의 메뉴(MENU)와 따로 둔다(C15 Q20).
+    AgentSlot("chat", "인사, 일반 지식, 글 다듬기 같은 가벼운 대화. Tool이 필요 없다", agent="chat", model="", tools=()),
+    AgentSlot("docs", "이 프로젝트 문서에 있는 내용을 묻는 질문", agent=MAIN, model="", tools=("search_docs",)),
+    AgentSlot("web", "최신 정보, 뉴스, 외부 웹사이트 내용", agent="web", model="", tools=()),
+    AgentSlot("utility", "계산, 지금 시각과 날짜", agent=MAIN, model="openai:gpt-6-luna", tools=("calculate", "get_current_time")),
+    AgentSlot("files", "샌드박스 파일 읽기, 목록, 쓰기", agent=MAIN, model="", tools=("files__*",)),
     # main 그대로(ask_user, delegate 포함, Q10)
-    Route(FALLBACK, "여러 일이 섞였거나 어느 경로인지 분명하지 않은 질문", agent=MAIN, model="", tools=()),
+    AgentSlot(FALLBACK, "여러 일이 섞였거나 어느 경로인지 분명하지 않은 질문", agent=MAIN, model="", tools=()),
 ]
 
 
@@ -56,9 +46,9 @@ def router_prompt(question: str) -> str:
     return f"경로 목록:\n{routes}\n\n질문: {question}"
 
 
-def pick(label: str) -> str | None:
+def read_route(label: str) -> str | None:
     """router의 답을 경로 이름으로. 대소문자, 앞뒤 공백, 따옴표, 마침표만 정리한다. 그 밖의 답은 None(Q4)."""
-    name = label.strip(" \t\n\"'`.").lower()
+    name = clean_label(label)
     return name if any(r.name == name for r in ROUTES) else None
 
 
@@ -71,20 +61,14 @@ def build(ctx: WorkflowContext) -> StateGraph:
             label = ask_agent(ctx.team.config_for(ROUTER, ctx.base), router_prompt(state["question"]))
         except Exception as e:  # 분류에 실패해도 general로 답한다(다시 부르지 않는다, Q4).
             label = f"오류: {type(e).__name__}"
-        route = pick(label)
+        route = read_route(label)
         ctx.progress(f"분류 결과: {route}" if route else f'분류 실패("{label}") → {FALLBACK}')
         return {"label": label, "route": route or FALLBACK}
 
     def run_route(state: State) -> State:
         route = routes[state["route"]]
         ctx.progress(f"{route.name} 경로 실행")
-        if route.agent == MAIN and not route.tools:
-            config = ctx.config  # 채팅의 main 그대로(스킬, 메모리, delegate 포함)
-        else:
-            config = ctx.team.config_for(route.agent, ctx.base, only=route.tools or None)
-        if route.model:
-            config = replace(config, llm_config=model_config(route.model, ctx.base.llm_config))
-        return {"status": "completed", "answer": ask_agent(config, state["question"])}
+        return {"status": "completed", "answer": ask_agent(slot_config(ctx, route), state["question"])}
 
     graph = StateGraph(State)
     graph.add_node("classify", classify)
