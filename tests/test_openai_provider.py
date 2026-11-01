@@ -76,4 +76,10 @@ def test_build_request_reflects_request_fields():
     assert request["model"] == "my-model"
     assert request["max_output_tokens"] == 1234
     assert request["instructions"] == "시스템"
-    assert request["tools"][0]["name"] == "t"
+    assert request["tools"][0]["name"] == "t" and "tool_choice" not in request
+
+
+def test_build_request_turns_tool_calls_off():
+    tool = Tool("t", "설명", {"type": "object", "properties": {}}, lambda: None)
+    request = build_request(LLMRequest(config=LLMConfig("openai", "m", None), messages=[UserMessage("q")], tools=[tool], allow_tool_calls=False))
+    assert request["tool_choice"] == "none" and request["tools"][0]["name"] == "t"

@@ -3,7 +3,8 @@
 from fakes import TEST_CONFIG, FakeLLM, final, tool_call
 
 from ai_agent_dock.core.llm import LLMResponse, Tool, ToolCall
-from ai_agent_dock.core.runtime.loop import run_agent
+from ai_agent_dock.core.hooks import HookSet
+from ai_agent_dock.core.runtime.loop import FINAL_STEP_NOTE, run_agent
 from ai_agent_dock.core.runtime.types import AgentConfig
 
 EMPTY_SCHEMA = {"type": "object", "properties": {}}
@@ -66,7 +67,28 @@ def test_max_steps_stops_infinite_loop():
     result = run_agent(AgentConfig(llm_config=TEST_CONFIG, tools=[ping], max_steps=3, llm=llm), "질문")
 
     assert (result.status, result.steps) == ("max_steps", 3)
-    assert len(llm.calls) == 3 and len(count) == 3
+    assert len(llm.calls) == 3 and len(count) == 2  # 마지막 스텝의 Tool 요청은 실행하지 않는다
+
+
+def test_last_step_is_a_wrap_up_call_without_tools():
+    """마지막 스텝은 Tool을 막고 마무리 지시문을 붙여 부른다. 지시문은 이력에 남지 않고, 답은 걸러서 남긴다."""
+    ping = Tool("ping", "", EMPTY_SCHEMA, lambda: "pong")
+    requests = []
+    responses = [tool_call("c1", "ping"), LLMResponse(text="찾은 것: pong. sk-abcdefghijklmnop1234", tool_calls=[ToolCall("c2", "ping", {})])]
+
+    def llm(request):
+        requests.append(request)
+        return responses[len(requests) - 1]
+
+    config = AgentConfig(llm_config=TEST_CONFIG, tools=[ping], max_steps=2, llm=llm, hooks=HookSet(after_answer=[lambda a: a.replace("sk-abcdefghijklmnop1234", "[KEY]")]))
+    result = run_agent(config, "질문")
+
+    first, last = requests
+    assert first.allow_tool_calls and not last.allow_tool_calls and last.tools == [ping]
+    assert last.messages[-1].content == FINAL_STEP_NOTE
+    assert (result.status, result.answer) == ("max_steps", "찾은 것: pong. [KEY]")
+    assert [m.role for m in result.history] == ["user", "assistant", "tool", "assistant"]
+    assert result.history[-1].tool_calls == [] and FINAL_STEP_NOTE not in [m.content for m in result.history]
 
 
 def test_run_agent_continues_from_prior_history_without_mutating_it():

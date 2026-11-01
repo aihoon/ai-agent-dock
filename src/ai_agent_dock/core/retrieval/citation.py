@@ -19,5 +19,11 @@ class CitationCheck:
 
 def check_citations(answer: str, seen: set[str]) -> CitationCheck:
     cited = CITE.findall(answer)
-    unknown = [cite for cite in dict.fromkeys(cited) if cite not in seen]
+    known = {_squash(cite) for cite in seen}
+    unknown = [cite for cite in dict.fromkeys(cited) if _squash(cite) not in known]
     return CitationCheck(cited=cited, unknown=unknown)
+
+
+def _squash(cite: str) -> str:
+    """연속 공백을 한 칸으로. 모델은 제목의 두 칸 공백(예: Notion의 "C11.  Safety")을 한 칸으로 옮겨 쓴다."""
+    return " ".join(cite.split())

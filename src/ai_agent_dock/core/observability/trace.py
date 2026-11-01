@@ -14,6 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from ..llm import LLMConfig, LLMResponse
 from ..safety.mask import mask_value
 
 
@@ -44,6 +45,22 @@ class Tracer:
             return
         self.turn += 1
         self.trace_id = uuid.uuid4().hex[:12]
+
+    def llm(self, step: int, duration_ms: float, config: LLMConfig, response: LLMResponse) -> None:
+        """LLM 호출 한 번의 줄: 모델, 답 텍스트, Tool 요청, 토큰 수."""
+        self.record(
+            "llm",
+            step,
+            duration_ms,
+            model=f"{config.provider}:{config.model}",  # 에이전트마다 모델이 다를 수 있다(C14 Q9).
+            text=response.text,
+            tool_calls=[{"name": c.name, "arguments": c.arguments} for c in response.tool_calls],
+            input_tokens=response.input_tokens,
+            input_tokens_source=response.input_tokens_source,
+            output_tokens=response.output_tokens,
+            output_tokens_source=response.output_tokens_source,
+            cached_input_tokens=response.cached_input_tokens,
+        )
 
     def record(self, kind: str, step: int | None, duration_ms: float | None = None, **fields: Any) -> None:
         """한 줄을 쓴다. kind는 session_start, turn_start, llm, tool, turn_end, delegate 등이다."""

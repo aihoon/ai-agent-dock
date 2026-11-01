@@ -28,6 +28,11 @@ REVISED = "사용자가 다르게 요청했다:"
 SAFETY_BLOCKED = "안전 정책으로 막았다:"  # Safety가 막았다(C11 D19)
 HOOK_BLOCKED = "Hook이 막았다:"  # 사용자 Hook이 막았다(C11 D20)
 NOT_RUN_PREFIXES = (BLOCKED, DENIED, REVISED, SAFETY_BLOCKED, HOOK_BLOCKED)
+# 마지막 스텝(max_steps번째 호출)에만 붙이는 지시문. 이번 요청에만 넣고 이력에는 남기지 않는다.
+FINAL_STEP_NOTE = (
+    "[스텝 상한] 이번이 마지막 호출이다. Tool은 더 쓸 수 없다. "
+    "지금까지 알아낸 것으로 답하고, 끝내지 못한 것은 못 했다고 밝혀라."
+)
 
 
 def run_agent(config: AgentConfig, question: str, *, history: list[Message] | None = None) -> AgentResult:
@@ -38,6 +43,7 @@ def run_agent(config: AgentConfig, question: str, *, history: list[Message] | No
     생략하면 빈 이력으로 시작한다(이전 턴을 기억하지 않는다).
 
     max_steps 우선순위: config.max_steps > 환경 변수 AGENT_MAX_STEPS > 기본값 10.
+    마지막 스텝은 Tool을 막고 FINAL_STEP_NOTE를 붙여 부르는 마무리 호출이다(상태는 max_steps).
     """
     max_steps = config.max_steps
     if max_steps is None:
@@ -55,39 +61,37 @@ def run_agent(config: AgentConfig, question: str, *, history: list[Message] | No
 
     for step in range(1, max_steps + 1):
         started = time.perf_counter()
+        last = step == max_steps  # 마지막 스텝은 Tool을 막고 지금까지의 결과로 답하게 한다
+        messages = [*history, UserMessage(content=FINAL_STEP_NOTE)] if last else history
         response = config.llm(
-            LLMRequest(config=config.llm_config, messages=history, tools=config.tools, system_prompt=config.system_prompt)
+            LLMRequest(
+                config=config.llm_config,
+                messages=messages,
+                tools=config.tools,
+                system_prompt=config.system_prompt,
+                allow_tool_calls=not last,
+            )
         )
         if tracer is not None:
-            tracer.record(
-                "llm",
-                step,
-                _ms_since(started),
-                model=f"{config.llm_config.provider}:{config.llm_config.model}",  # 에이전트마다 모델이 다를 수 있다(C14 Q9).
-                text=response.text,
-                tool_calls=[{"name": c.name, "arguments": c.arguments} for c in response.tool_calls],
-                input_tokens=response.input_tokens,
-                input_tokens_source=response.input_tokens_source,
-                output_tokens=response.output_tokens,
-                output_tokens_source=response.output_tokens_source,
-                cached_input_tokens=response.cached_input_tokens,
-            )
+            tracer.llm(step, _ms_since(started), config.llm_config, response)
         usage.add(response)
-        # 응답을 이력에 그대로 이어 붙여야 모델이 다음 호출에서 자신의 이전 판단을 본다.
-        history.append(
-            AssistantMessage(content=response.text, tool_calls=response.tool_calls, raw=response.raw)
-        )
-        answer = response.text
+        # 응답을 이력에 이어 붙여야 모델이 다음 호출에서 자신의 이전 판단을 본다.
+        # 글은 최종 답이든 Tool 요청과 함께 온 중간 설명이든 거른다. 바뀌었으면(예: 키를 가림) 원본이 남은 raw는 버린다.
+        answer = _filter_answer(config, response.text)
+        # 마지막 스텝의 Tool 요청은 실행하지 않는다. 결과를 볼 호출이 없고, 짝 없는 요청을 이력에 두면 다음 호출이 실패한다.
+        tool_calls = [] if last else response.tool_calls
+        raw = response.raw if answer == response.text and tool_calls == response.tool_calls else []
+        if answer or not last:
+            history.append(AssistantMessage(content=answer, tool_calls=tool_calls, raw=raw))
 
-        if not response.tool_calls:
-            filtered = _filter_answer(config, answer)
-            if filtered != answer:  # 바뀐 답(예: 키를 가림)을 이력에 둔다. 원본이 남은 raw는 버린다.
-                answer = filtered
-                history[-1] = AssistantMessage(content=answer)
+        if last:
+            log.warning("최대 스텝(%d)에 도달해 마무리 답으로 종료", max_steps)
+            return _finish(tracer, turn_started, AgentResult(answer=answer, status="max_steps", steps=step, history=history, usage=usage))
+        if not tool_calls:
             log.info("step %d: 최종 답변", step)
             return _finish(tracer, turn_started, AgentResult(answer=answer, status="completed", steps=step, history=history, usage=usage))
 
-        for call in response.tool_calls:
+        for call in tool_calls:
             started = time.perf_counter()
             content, is_error = _run_call(config, tools_by_name, call, denied)
             if tracer is not None:
@@ -102,7 +106,7 @@ def run_agent(config: AgentConfig, question: str, *, history: list[Message] | No
                 )
             history.append(ToolMessage(tool_call_id=call.id, content=content, is_error=is_error))
 
-    # 모델이 끝까지 Tool만 요청했다. 마지막 응답 텍스트(없을 수 있음)와 함께 종료 사유를 알린다.
+    # max_steps가 1보다 작아 한 번도 부르지 않았다. 보통은 마지막 스텝의 마무리 답으로 위에서 끝난다.
     log.warning("최대 스텝(%d)에 도달해 종료", max_steps)
     return _finish(tracer, turn_started, AgentResult(answer=answer, status="max_steps", steps=max_steps, history=history, usage=usage))
 

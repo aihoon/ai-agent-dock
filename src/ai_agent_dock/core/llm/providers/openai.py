@@ -126,6 +126,8 @@ def build_request(request: LLMRequest) -> dict[str, Any]:
         kwargs["max_output_tokens"] = request.config.max_output_tokens
     if request.tools:
         kwargs["tools"] = to_tools(request.tools)
+        if not request.allow_tool_calls:
+            kwargs["tool_choice"] = "none"
     if request.system_prompt:
         kwargs["instructions"] = request.system_prompt
     return kwargs

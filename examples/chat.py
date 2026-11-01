@@ -51,7 +51,7 @@ MEMORY_PATH = Path(__file__).resolve().parent.parent / "data" / "memory.md"  # �
 CHECKPOINT_PATH = Path(__file__).resolve().parent.parent / "data" / "checkpoints.sqlite"  # 워크플로 체크포인트(C10 D4). data/는 git에서 제외한다.
 SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"  # 프로젝트 루트의 skills/
 KNOWLEDGE_DIR = Path(__file__).resolve().parent.parent / "knowledge"  # 프로젝트 루트의 knowledge/(검색할 문서)
-INDEX_PATH = Path(__file__).resolve().parent.parent / "data" / "index.sqlite"  # 문서 색인(문서에서 다시 만들 수 있다). data/는 git에서 제외한다.
+INDEX_PATH = Path(__file__).resolve().parent.parent / "data" / "index.sqlite"  # 문서 색인(문서에서 다시 만들 수 있다). .env의 DOCS_INDEX로 바꿀 수 있다. data/는 git에서 제외한다.
 AGENTS_DIR = Path(__file__).resolve().parent.parent / "agents"  # 에이전트 정의(C12). .env의 AGENTS_DIR로 바꿀 수 있다.
 TASK_PREVIEW = 50  # 위임 진행 줄에 보여 줄 task 글자 수
 SETUP_STEPS = 7  # 시작 화면의 단계 수
@@ -193,10 +193,11 @@ def main():
             print(f"  → {names([s.name for s in skills])}")
         except ValueError as e:  # 스킬이나 에이전트 정의의 형식 오류 등
             raise SystemExit(f"설정 오류: {e}")
-        setup_step(3, "문서 색인 열기", f"{INDEX_PATH.parent.name}/{INDEX_PATH.name}")
+        index_path = Path(env_str("DOCS_INDEX", str(INDEX_PATH)))
+        setup_step(3, "문서 색인 열기", f"{index_path.parent.name}/{index_path.name}")
         knowledge = None
         try:
-            knowledge = open_knowledge(INDEX_PATH)
+            knowledge = open_knowledge(index_path)
         except Exception as e:  # 색인 파일이 깨졌거나 열 수 없으면 문서 검색만 끄고 계속한다.
             print(f"  ⚠ 문서 검색을 끕니다: {type(e).__name__}: {e}")
         if knowledge:

@@ -139,6 +139,12 @@ def test_citation_check_flags_sources_not_in_this_turn():
     assert check.unknown == ["스킬, 본문"]  # 중복은 한 번만 보고한다
 
 
+def test_citation_check_ignores_how_many_spaces_are_between_words():  # Notion 제목의 "C11.  Safety"(두 칸)를 모델은 한 칸으로 쓴다
+    check = check_citations("답 [C11. Safety와 Guardrails, 5. 결정]", {"C11.  Safety와 Guardrails, 5.  결정"})
+
+    assert check.unknown == []
+
+
 def test_citation_check_passes_when_no_citation_is_written():
     check = check_citations("출처 없는 답", set())
 

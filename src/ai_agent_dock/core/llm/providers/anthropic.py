@@ -139,7 +139,9 @@ def build_request(request: LLMRequest) -> dict[str, Any]:
         "messages": to_messages(request.messages),
     }
     if request.tools:
-        kwargs["tools"] = to_tools(request.tools)
+        kwargs["tools"] = to_tools(request.tools)  # 이력에 tool_use가 있으면 Tool을 막을 때도 정의는 보내야 한다
+        if not request.allow_tool_calls:
+            kwargs["tool_choice"] = {"type": "none"}
     if request.system_prompt:
         # 시스템 프롬프트를 블록으로 보내야 캐시 표시를 달 수 있다. 매 요청마다 전체를 보내고, 같은 앞부분이면 제공자가 재사용한다.
         kwargs["system"] = [{"type": "text", "text": request.system_prompt, "cache_control": CACHE}]

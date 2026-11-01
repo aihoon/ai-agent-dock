@@ -37,6 +37,7 @@ class LLMRequest:
     messages: list[Message]
     system_prompt: str | None = None
     tools: list[Tool] = field(default_factory=list)
+    allow_tool_calls: bool = True  # False면 Tool 정의는 보내되 부르지 못하게 한다(마지막 스텝의 마무리 호출)
 
 
 @dataclass

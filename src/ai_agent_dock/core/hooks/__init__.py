@@ -1,6 +1,6 @@
 """Hook(C11 D19~D21): 사용자가 hooks.json으로 설치해 에이전트 루프에 더하는 확장. Safety(항상 거는 고정 검사)와 다르다.
 
-자리(이벤트)는 3개다: before_tool(실행 직전, 승인보다 먼저), after_tool(실행 직후), after_answer(최종 답을 이력에 넣기 전).
+자리(이벤트)는 3개다: before_tool(실행 직전, 승인보다 먼저), after_tool(실행 직후), after_answer(모델의 글을 이력에 넣기 전. 최종 답과 Tool 요청과 함께 온 중간 설명 모두).
 hooks.json의 Hook은 외부 명령이다. 표준 입력으로 JSON을 받고, 표준 출력으로 JSON을 돌려준다.
   받는 것: {"event", "tool", "arguments", "result", "answer"}
   돌려주는 것: {"block": "이유"}(before_tool), {"result": "새 결과"}(after_tool), {"answer": "새 답"}(after_answer), 빈 출력은 통과

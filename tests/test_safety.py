@@ -8,7 +8,7 @@ import pytest
 from fakes import TEST_CONFIG, FakeLLM, final, tool_call
 
 from ai_agent_dock.core.hitl import Approval, AuditLog, ask_in_terminal
-from ai_agent_dock.core.llm import Tool, ToolCall
+from ai_agent_dock.core.llm import LLMResponse, Tool, ToolCall
 from ai_agent_dock.core.observability import Tracer
 from ai_agent_dock.core.runtime.loop import HOOK_BLOCKED, SAFETY_BLOCKED, run_agent
 from ai_agent_dock.core.runtime.types import AgentConfig
@@ -178,6 +178,18 @@ def test_records_hold_no_raw_secrets_and_answer_key_is_masked(tmp_path):
         text = path.read_text(encoding="utf-8")
         assert secret not in text and email not in text, path
     assert result.answer == "키는 [KEY]" and safety.answer_masked()
+
+
+def test_text_sent_with_tool_calls_is_filtered_like_the_answer():  # 중간 설명 글도 Hook → Safety를 거쳐 이력에 들어간다
+    read, _ = tool("read", read_only=True, trusted=True)
+    secret = "sk-abcdefghijklmnop1234"
+    middle = LLMResponse(text=f"{secret}로 읽어 보겠습니다.", tool_calls=[ToolCall(id="c1", name="read", arguments={"path": "a"})])
+    hooks = HookSet(after_answer=[lambda a: a + " (hook)"])
+    config, safety = with_safety(AgentConfig(llm_config=TEST_CONFIG, tools=[read], hooks=hooks, llm=FakeLLM([middle, final("답")])))
+    result = run_agent(config, "읽어")
+    assistant = result.history[1]
+    assert assistant.content == "[KEY]로 읽어 보겠습니다. (hook)" and assistant.tool_calls == middle.tool_calls
+    assert tool_messages(result)[0].tool_call_id == "c1" and safety.answer_masked()
 
 
 # --- 의존 방향 ---

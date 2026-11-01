@@ -2,7 +2,7 @@
 
 - before_tool: 안전 정책 검사(차단, 경로 제한)
 - after_tool: 외부 내용을 <untrusted> 경계로 감싸고 지시문을 탐지한다(막지 않고 표시만, D10)
-- after_answer: 답의 API 키를 가린다
+- after_answer: 답(중간 설명 글 포함)의 API 키를 가린다
 기록(추적, 감사 로그)의 마스킹은 기록하는 코드가 mask.py로 직접 한다.
 사용자가 설치하는 확장은 Hook(core/hooks)이다. 루프는 Safety를 Hook보다 바깥에서 부른다(D22).
 """

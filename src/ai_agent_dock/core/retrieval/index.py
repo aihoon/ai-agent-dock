@@ -45,8 +45,8 @@ class KnowledgeIndex:
         self._db.close()
 
     def refresh(self, root: Path) -> RefreshReport:
-        """폴더의 .md 파일과 색인을 맞춘다. 내용이 바뀐 파일만 다시 임베딩한다."""
-        files = {p.name: p for p in sorted(root.glob("*.md"))} if root.is_dir() else {}
+        """폴더(하위 폴더 포함)의 .md 파일과 색인을 맞춘다. 문서는 폴더 기준 상대 경로로 구분하고, 내용이 바뀐 파일만 다시 임베딩한다."""
+        files = {p.relative_to(root).as_posix(): p for p in sorted(root.rglob("*.md"))} if root.is_dir() else {}
         stored = dict(self._db.execute("SELECT source, hash FROM files").fetchall())
         added = updated = unchanged = 0
         for name, path in files.items():

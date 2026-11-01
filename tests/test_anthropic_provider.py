@@ -112,3 +112,9 @@ def test_build_request_reflects_request_fields():
     assert request["model"] == "my-model"
     assert request["max_tokens"] == 2048
     assert request["system"] == [{"type": "text", "text": "시스템", "cache_control": {"type": "ephemeral"}}]  # 캐시 표시(C9 D21)
+
+
+def test_build_request_turns_tool_calls_off():
+    tool = Tool("t", "설명", {"type": "object", "properties": {}}, lambda: None)
+    request = build_request(LLMRequest(config=LLMConfig("anthropic", "m", 2048), messages=[UserMessage("q")], tools=[tool], allow_tool_calls=False))
+    assert request["tool_choice"] == {"type": "none"} and request["tools"][0]["name"] == "t"  # 이력의 tool_use 때문에 tools는 남긴다
