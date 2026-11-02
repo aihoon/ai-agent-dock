@@ -18,6 +18,7 @@
   uv run python examples/chat_walkthrough.py --scenario routing  # 모델 없이: router가 분류 → 경로마다 다른 프롬프트, Tool, 모델(C14), 분류 실패 → general
   uv run python examples/chat_walkthrough.py --scenario sectioning  # 모델 없이: selector가 경로 2개와 하위 질문 → 동시 실행 → aggregator(C15)
   uv run python examples/chat_walkthrough.py --scenario voting   # 모델 없이: judge 3표 동시 실행 → 다수결, 정규식 탐지와 비교(C15)
+  uv run python examples/chat_walkthrough.py --scenario orchestrator-workers  # 모델 없이: orchestrator가 작업 3개와 worker → 동시 실행 → aggregator(C16)
   uv run python examples/chat_walkthrough.py --stream "17*23은 얼마야?"    # 실제 모델로 스트리밍
   uv run python examples/chat_walkthrough.py "17*23은 얼마야?" "거기에 2를 곱해 줘"   # 실제 모델로 여러 턴
   uv run python examples/chat_walkthrough.py --provider anthropic "안녕" "내가 방금 뭐라고 했지?"
@@ -231,7 +232,7 @@ def hitl_write_tool(tracer):
 def main():
     parser = argparse.ArgumentParser(description="여러 턴 대화의 단계별 출력 데모")
     parser.add_argument("questions", nargs="*", help="실제 모델에 차례로 보낼 질문들(생략하면 기본 두 질문)")
-    parser.add_argument("--scenario", choices=[*SCENARIOS, "workflow", "safety", "subagent", "chain", "routing", "sectioning", "voting"], help="모델 없이 시나리오 실행")
+    parser.add_argument("--scenario", choices=[*SCENARIOS, "workflow", "safety", "subagent", "chain", "routing", "sectioning", "voting", "orchestrator-workers"], help="모델 없이 시나리오 실행")
     parser.add_argument("--provider", help="LLM 제공자(openai, anthropic). 생략하면 .env의 LLM_PROVIDER")
     parser.add_argument("--max-steps", type=int, help="한 턴에서 모델을 호출하는 횟수 상한")
     parser.add_argument("--stream", action="store_true", help="스트리밍으로 받아 글자 조각이 도착하는 모습을 보여 준다")
@@ -249,7 +250,7 @@ def main():
         return walk_chain()
     if args.scenario == "routing":
         return walk_routing()
-    if args.scenario in ("sectioning", "voting"):
+    if args.scenario in ("sectioning", "voting", "orchestrator-workers"):
         return walk_parallel(args.scenario)
 
     if args.scenario:
@@ -548,7 +549,7 @@ def walk_routing():
 
 
 def walk_parallel(name):
-    """sectioning이나 voting 워크플로(C15)를 가짜 모델로 돌린다. 가지가 동시에 돌아 호출 순서가 정해지지 않으므로,
+    """sectioning, voting(C15), orchestrator-workers(C16) 워크플로를 가짜 모델로 돌린다. 가지가 동시에 돌아 호출 순서가 정해지지 않으므로,
     가짜 모델은 순서가 아니라 시스템 프롬프트 첫 줄(에이전트)과 질문으로 답한다. 가지의 모델 호출은 1초씩 걸리게 해 동시에 도는 것을 보인다."""
     if name == "sectioning":
         question = "Skill은 어떻게 불러오고, 3의 12제곱은 얼마야?"
@@ -558,10 +559,23 @@ def walk_parallel(name):
             "12제곱": [ask("c1", "calculate", expression="3**12"), final("531441이다.")],
             "당신은 여러 자료를": [final("Skill은 load_skill로 불러옵니다 [Skill, 불러오기]. 3의 12제곱은 531441입니다.")],
         }
+    elif name == "orchestrator-workers":
+        question = "Skill과 MCP를 정리하고 최신 MCP 소식도 붙인 짧은 보고서를 써 줘."
+        answers = {
+            "당신은 작업을 나눠": [final("researcher: 문서에서 Skill을 불러오는 방법\nresearcher: 문서에서 MCP Tool을 찾는 방법\nweb: MCP 최근 소식")],
+            "Skill을 불러오는": [final("Skill 본문은 load_skill로 불러온다 [Skill, 불러오기].")],
+            "MCP Tool을": [final("MCP Tool은 서버에서 발견해 Tool 목록에 넣는다 [Tool과 MCP, MCP].")],
+            "최근 소식": [final("MCP 새 버전이 나왔다 [MCP 소식](https://modelcontextprotocol.io).")],
+            "당신은 여러 자료를": [final("# Skill과 MCP\n## 요약\nSkill은 load_skill로, MCP Tool은 발견해서 쓴다.\n## Skill\nload_skill로 불러온다 [Skill, 불러오기].\n## MCP\n서버에서 발견한다 [Tool과 MCP, MCP].\n## 최근 소식\n새 버전 [MCP 소식](https://modelcontextprotocol.io).")],
+        }
     else:
         question = (KNOWLEDGE_DIR.parent / "evals/fixtures/sandbox/eval/injection-note.md").read_text(encoding="utf-8")
         answers = {"당신은 판정자다": [final("injection"), final("Injection."), final("clean")]}
     lock = threading.Lock()
+
+    def say(text):  # 가지의 줄이 섞이지 않게 줄바꿈까지 한 번에 쓴다. print는 글자와 줄바꿈을 따로 써서 다른 가지의 줄이 끼어든다.
+        sys.stdout.write(text + "\n")
+        sys.stdout.flush()
 
     def llm(request, on_text_delta=None):
         first = (request.system_prompt or "").splitlines()[0]
@@ -569,15 +583,15 @@ def walk_parallel(name):
         with lock:  # 가지들이 같은 응답 목록을 나눠 쓴다.
             key = next((k for k in answers if first.startswith(k)), None) or next(k for k in answers if k in asked)  # 에이전트가 먼저
             response = answers[key].pop(0) if len(answers[key]) > 1 else answers[key][0]
-        if not first.startswith(("당신은 질문을 나눠", "당신은 여러 자료를")):
+        if not first.startswith(("당신은 질문을 나눠", "당신은 작업을 나눠", "당신은 여러 자료를")):
             time.sleep(1)  # 가지의 모델 호출 한 번이 1초 걸린다고 치자.
         out = [f"{c.name}({c.arguments})" for c in response.tool_calls] or [response.text or ""]
-        print(f"    모델 호출: {first} …\n      입력: {describe(request.messages[-1])[:60]}\n      출력: {out[0]}", flush=True)  # 가지의 줄이 섞이지 않게 한 번에 찍는다.
+        say(f"    모델 호출: {first} …\n      입력: {describe(request.messages[-1])[:60]}\n      출력: {out[0]}")
         return response
 
     team = AgentTeam(load_agents(Path(__file__).resolve().parent.parent / "agents"))
     base = AgentConfig(llm_config=LLMConfig(provider="scenario", model="scenario", max_output_tokens=None), tools=BUILTIN_TOOLS, llm=llm)
-    context = WorkflowContext(config=team.config_for(MAIN, base), team=team, base=base, progress=lambda message: print(f"  ▸ {message}", flush=True))
+    context = WorkflowContext(config=team.config_for(MAIN, base), team=team, base=base, progress=lambda message: say("  ▸ " + message.replace("\n", "\n    ")))
     banner(f"/workflow {name} {question.splitlines()[0]}")
     started = time.perf_counter()
     outcome = WorkflowRunner(WORKFLOWS, context, InMemorySaver()).start(name, question)

@@ -122,8 +122,9 @@ class Progress:
         self._say(f"  ⛔ 안전 정책으로 막았습니다: {name} ({reason})")
 
     def workflow_step(self, message: str):
-        """워크플로 노드가 알린 줄(C10 D24). 스텝 번호는 에이전트별로 이어 센다(가지가 끝났다는 줄이 다른 가지의 번호를 지우지 않게, C15 Q25)."""
-        self._say(f"▸ {message}")
+        """워크플로 노드가 알린 줄(C10 D24). 스텝 번호는 에이전트별로 이어 센다(가지가 끝났다는 줄이 다른 가지의 번호를 지우지 않게, C15 Q25).
+        여러 줄이면 둘째 줄부터 ▸ 없이 첫 줄의 글자에 맞춰 들여 쓴다(C16 작업 목록)."""
+        self._say("▸ " + message.replace("\n", "\n" + self.indent + "  "))
 
     def wrap_llm(self, agent: str, llm):
         """AgentTeam이 에이전트마다 감싼다. 진행 줄에 어느 에이전트가 어느 모델을 부르는지 보인다(C14)."""

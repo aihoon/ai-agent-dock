@@ -56,7 +56,7 @@ def team_and_base(llm, tools=POOL, **team_args):
 
 def test_project_agents_load_and_main_keeps_the_old_base_prompt():
     agents = load_agents(AGENTS)
-    assert list(agents) == ["aggregator", "chat", "judge", MAIN, "researcher", "router", "selector", "web"]  # chat, router, web은 C14, aggregator, judge, selector는 C15
+    assert list(agents) == ["aggregator", "chat", "judge", MAIN, "orchestrator", "researcher", "router", "selector", "web"]  # chat, router, web은 C14, aggregator, judge, selector는 C15, orchestrator는 C16
     assert agents[MAIN].body.startswith("당신은 도움이 되는 어시스턴트다.")  # 예전 DEFAULT_SYSTEM_PROMPT를 글자 그대로 옮겼다(Q11).
     assert agents[MAIN].tools == ("*", "!web__*")
     assert agents["researcher"].max_steps == 6

@@ -46,6 +46,7 @@ class Case:
     expect_route: str | None = None  # routing 워크플로가 골라야 할 경로(C14 Q8)
     expect_routes: list[str] | None = None  # sectioning이 골라야 할 경로들. 순서는 보지 않는다(C15)
     expect_verdict: str | None = None  # voting의 판정: injection, clean, unsure(C15)
+    expect_workers: list[str] | None = None  # orchestrator-workers가 한 번 이상 써야 할 worker. 순서, 개수, 다른 worker는 보지 않는다(C16 Q17)
 
 
 def load_cases(path: Path) -> list[Case]:
@@ -125,9 +126,16 @@ def check(case: Case, result: AgentResult, children: Iterable[AgentResult] = ())
 
 
 def check_workflow(
-    case: Case, status: str, revisions: int, route: str | None = None, *, routes: list[str] | None = None, verdict: str | None = None
+    case: Case,
+    status: str,
+    revisions: int,
+    route: str | None = None,
+    *,
+    routes: list[str] | None = None,
+    verdict: str | None = None,
+    workers: list[str] | None = None,
 ) -> list[str]:
-    """워크플로 케이스의 마지막 상태, 고쳐 쓴 횟수, 고른 경로, 판정을 본다(C10 D22, C14 Q8, C15)."""
+    """워크플로 케이스의 마지막 상태, 고쳐 쓴 횟수, 고른 경로, 판정, 쓴 worker를 본다(C10 D22, C14 Q8, C15, C16)."""
     failures = []
     if case.expect_route and route != case.expect_route:
         failures.append(f"경로가 {case.expect_route}이 아니라 {route}이었다")
@@ -135,6 +143,9 @@ def check_workflow(
         failures.append(f"경로가 {sorted(case.expect_routes)}이 아니라 {sorted(routes or [])}이었다")
     if case.expect_verdict and verdict != case.expect_verdict:
         failures.append(f"판정이 {case.expect_verdict}이 아니라 {verdict}였다")
+    missing = [w for w in case.expect_workers or [] if w not in (workers or [])]
+    if missing:
+        failures.append(f"worker {', '.join(missing)}을 쓰지 않았다(쓴 worker: {workers or []})")
     if case.expect_status and status != case.expect_status:
         failures.append(f"워크플로가 {case.expect_status}가 아니라 {status}로 끝났다")
     if case.expect_max_revisions is not None and revisions > case.expect_max_revisions:

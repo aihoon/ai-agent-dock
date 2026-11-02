@@ -42,7 +42,15 @@ POOL = [
 ]
 
 # 시스템 프롬프트 첫 줄로 에이전트를 알아본다.
-WHO = {"당신은 질문을 나눠": "selector", "당신은 여러 자료를": "aggregator", "당신은 판정자다": "judge", "당신은 웹 검색을": "web"}
+WHO = {
+    "당신은 질문을 나눠": "selector",
+    "당신은 여러 자료를": "aggregator",
+    "당신은 판정자다": "judge",
+    "당신은 웹 검색을": "web",
+    "당신은 작업을 나눠": "orchestrator",  # C16
+    "당신은 조사 담당": "researcher",
+}
+NOT_BRANCHES = ("selector", "aggregator", "orchestrator")  # 나누고 합치는 에이전트는 가지가 아니다.
 
 
 class ByContent:
@@ -62,7 +70,7 @@ class ByContent:
             key = agent if agent in self.answers else next(k for k in self.answers if k in question)
             answers = self.answers[key]
             response = answers.pop(0) if len(answers) > 1 else answers[0]
-        if self.barrier is not None and agent not in ("selector", "aggregator") and len(request.messages) == 1:
+        if self.barrier is not None and agent not in NOT_BRANCHES and len(request.messages) == 1:
             self.barrier.wait()
         if isinstance(response, Exception):
             raise response

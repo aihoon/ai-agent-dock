@@ -142,3 +142,11 @@ def test_progress_counts_steps_per_agent_until_the_next_turn(capsys):  # 동시�
     docs(request)
     out = capsys.readouterr().out
     assert [line.split("(")[1].split(",")[0] for line in out.splitlines() if "모델 호출" in line] == ["스텝 1", "스텝 1", "스텝 2", "스텝 1"]
+
+
+def test_progress_indents_the_following_lines_of_a_multiline_step_without_the_marker(capsys):  # C16 작업 목록
+    sys.path.insert(0, str(EXAMPLES))
+    import chat
+
+    chat.Progress().workflow_step("작업 2개:\n  researcher-1: 가\n  web-2: 나")
+    assert capsys.readouterr().out == "▸ 작업 2개:\n    researcher-1: 가\n    web-2: 나\n"

@@ -64,6 +64,7 @@ class Outcome:
     routes: list[str] | None = None  # sectioning이 고른 경로들(C15). 평가가 expect_routes와 비교한다.
     verdict: str | None = None  # voting의 판정(C15). 평가가 expect_verdict와 비교한다.
     ballots: list[str] | None = None  # voting의 표 1~3. 평가가 판정자 1번과 다수결의 흔들림을 비교한다.
+    workers: list[str] | None = None  # orchestrator-workers가 작업마다 고른 worker(C16). 평가가 expect_workers와 비교한다.
 
 
 def ask_agent(config: AgentConfig, prompt: str) -> str:
@@ -156,6 +157,7 @@ class WorkflowRunner:
             routes=values.get("routes"),
             verdict=values.get("verdict"),
             ballots=values.get("ballots"),
+            workers=values.get("workers"),
         )
 
 

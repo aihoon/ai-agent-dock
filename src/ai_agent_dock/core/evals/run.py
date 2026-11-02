@@ -108,7 +108,7 @@ def run_workflow_case(case: Case, runner: WorkflowRunner) -> tuple[list[str], Ou
     while result.status == WAITING:
         result = runner.resume(result.run_id, decisions.pop(0) if decisions else "approve")
     answer = AgentResult(answer=result.answer, status="completed", steps=0, history=[])
-    failures = check_workflow(case, result.status, result.revisions, result.route, routes=result.routes, verdict=result.verdict)
+    failures = check_workflow(case, result.status, result.revisions, result.route, routes=result.routes, verdict=result.verdict, workers=result.workers)
     return check(case, answer) + failures, result
 
 
