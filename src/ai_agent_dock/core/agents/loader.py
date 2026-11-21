@@ -1,4 +1,4 @@
-"""에이전트 정의 읽기: agents/<이름>/AGENT.md를 찾고, 머리말을 검사하고, Tool 패턴을 고르고, 에이전트 목록 문장을 만든다.
+"""에이전트 정의 읽기: agents/<이름>/AGENT.md를 찾고, 머리말을 검사하고, 에이전트 목록 문장을 만든다.
 
 형식은 스킬(SKILL.md)과 같다. 머리말: name, description, model, tools, delegate, max_steps. 본문: 역할 지침.
 여섯 항목을 모두 적고, 쓰지 않는 값은 비워 둔다(C14). 빈 model은 대화 모델, 빈 delegate는 false, 빈 max_steps는 기본값이다.
@@ -7,11 +7,9 @@ tools는 비울 수 없다. [a, b] 또는 a, b로 쓴다. "*"는 모든 Tool, "!
 
 from __future__ import annotations
 
-from collections.abc import Iterable
-from fnmatch import fnmatchcase
 from pathlib import Path
 
-from ..llm import Tool, parse_model
+from ..llm import parse_model
 from ..skills.loader import NAME_MAX_LENGTH, NAME_PATTERN, split_frontmatter
 from ..skills.types import SkillFormatError
 from .types import AgentSpec, AgentFormatError
@@ -36,19 +34,6 @@ def load_agents(root: Path) -> dict[str, AgentSpec]:
     if MAIN not in agents:
         raise AgentFormatError(f"메인 에이전트 정의가 없다: {root / MAIN / AGENT_FILE}")
     return agents
-
-
-def matches(patterns: Iterable[str], name: str) -> bool:
-    """Tool 이름이 패턴에 맞는지. 하나라도 포함 패턴에 맞고, 제외 패턴에는 하나도 맞지 않아야 한다."""
-    patterns = list(patterns)
-    include = [p for p in patterns if not p.startswith("!")]
-    exclude = [p[1:] for p in patterns if p.startswith("!")]
-    return any(fnmatchcase(name, p) for p in include) and not any(fnmatchcase(name, p) for p in exclude)
-
-
-def select_tools(patterns: Iterable[str], tools: list[Tool]) -> list[Tool]:
-    patterns = list(patterns)
-    return [t for t in tools if matches(patterns, t.name)]
 
 
 def build_agent_index(agents: list[AgentSpec]) -> str:

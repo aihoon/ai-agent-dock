@@ -19,6 +19,7 @@
   uv run python examples/chat_walkthrough.py --scenario sectioning  # 모델 없이: selector가 경로 2개와 하위 질문 → 동시 실행 → aggregator(C15)
   uv run python examples/chat_walkthrough.py --scenario voting   # 모델 없이: judge 3표 동시 실행 → 다수결, 정규식 탐지와 비교(C15)
   uv run python examples/chat_walkthrough.py --scenario orchestrator-workers  # 모델 없이: orchestrator가 작업 3개와 worker → 동시 실행 → aggregator(C16)
+  uv run python examples/chat_walkthrough.py --scenario evaluator-optimizer   # 모델 없이: 답 작성 → evaluator가 기준표로 평가(출처 실패) → 고쳐 쓰기 → 통과(C17)
   uv run python examples/chat_walkthrough.py --stream "17*23은 얼마야?"    # 실제 모델로 스트리밍
   uv run python examples/chat_walkthrough.py "17*23은 얼마야?" "거기에 2를 곱해 줘"   # 실제 모델로 여러 턴
   uv run python examples/chat_walkthrough.py --provider anthropic "안녕" "내가 방금 뭐라고 했지?"
@@ -40,7 +41,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.sqlite import SqliteSaver
-from walkthrough import Tracer, ask, banner, describe, scripted  # C1 워크스루의 도구를 재사용한다.
+from walkthrough import Tracer, ask, banner, clip, describe, scripted  # C1 워크스루의 도구를 재사용한다.
 
 from ai_agent_dock.core.agents import MAIN, AgentTeam, build_agent_index, load_agents
 from ai_agent_dock.core.hitl import Approval, ask_in_terminal
@@ -232,7 +233,7 @@ def hitl_write_tool(tracer):
 def main():
     parser = argparse.ArgumentParser(description="여러 턴 대화의 단계별 출력 데모")
     parser.add_argument("questions", nargs="*", help="실제 모델에 차례로 보낼 질문들(생략하면 기본 두 질문)")
-    parser.add_argument("--scenario", choices=[*SCENARIOS, "workflow", "safety", "subagent", "chain", "routing", "sectioning", "voting", "orchestrator-workers"], help="모델 없이 시나리오 실행")
+    parser.add_argument("--scenario", choices=[*SCENARIOS, "workflow", "safety", "subagent", "chain", "routing", "sectioning", "voting", "orchestrator-workers", "evaluator-optimizer"], help="모델 없이 시나리오 실행")
     parser.add_argument("--provider", help="LLM 제공자(openai, anthropic). 생략하면 .env의 LLM_PROVIDER")
     parser.add_argument("--max-steps", type=int, help="한 턴에서 모델을 호출하는 횟수 상한")
     parser.add_argument("--stream", action="store_true", help="스트리밍으로 받아 글자 조각이 도착하는 모습을 보여 준다")
@@ -250,7 +251,7 @@ def main():
         return walk_chain()
     if args.scenario == "routing":
         return walk_routing()
-    if args.scenario in ("sectioning", "voting", "orchestrator-workers"):
+    if args.scenario in ("sectioning", "voting", "orchestrator-workers", "evaluator-optimizer"):
         return walk_parallel(args.scenario)
 
     if args.scenario:
@@ -475,6 +476,11 @@ def walk_subagent():
     print(f"  스텝: main {steps[MAIN]}번, researcher {steps['researcher']}번(main의 스텝 1 안에서 일어났다)")
 
 
+def tag_agent(agent, llm):
+    """AgentTeam의 wrap_llm: 모델 호출 줄에 어느 에이전트가 불렀는지 보이게 이름을 넘긴다."""
+    return lambda request, on_text_delta=None: llm(request, on_text_delta, agent=agent)
+
+
 def walk_chain():
     """prompt-chaining 워크플로(C13)를 가짜 모델로 두 번 돌린다. 한 번은 gate를 통과해 본문까지, 한 번은 gate에서 멈춘다.
     단계마다 에이전트를 새 이력으로 부르므로, 단계의 입력은 사용자 프롬프트 하나다. 단계마다 받은 Tool도 보여 준다."""
@@ -513,7 +519,7 @@ def walk_chain():
         context = WorkflowContext(config=config, knowledge=knowledge, progress=lambda message: print(f"  ▸ {message}"))
         banner(f"{title}: /workflow prompt-chaining {question}")
         outcome = WorkflowRunner(WORKFLOWS, context, InMemorySaver()).start("prompt-chaining", question)
-        print(f"\n→ 상태: {outcome.status}\n  답: {outcome.answer}")
+        print(f"  ▸ 상태: {outcome.status}\n  답: {outcome.answer}")
 
 
 def walk_routing():
@@ -524,12 +530,12 @@ def walk_routing():
         ("인사", "안녕! 한마디 해 줘.", scripted(final("chat"), final("안녕하세요! 좋은 하루 보내세요."))),
         ("분류 실패", "문서 찾아서 파일로 저장해 줘.", scripted(final("경로: docs 그리고 files"), final("(main이 모든 Tool로 처리한 답)"))),
     ]
-    team = AgentTeam(load_agents(Path(__file__).resolve().parent.parent / "agents"))
+    team = AgentTeam(load_agents(Path(__file__).resolve().parent.parent / "agents"), wrap_llm=tag_agent)
     llm_config = LLMConfig(provider="scenario", model="scenario", max_output_tokens=None)
     for title, question, script in runs:
-        def llm(request, on_text_delta=None, script=script):
+        def llm(request, on_text_delta=None, script=script, agent=None):
             first = (request.system_prompt or "").splitlines()[0]
-            print(f"    모델 호출 ({request.config.provider}:{request.config.model}, 받은 Tool: {', '.join(t.name for t in request.tools) or '없음'})")
+            print(f"    모델 호출 [{agent}] ({request.config.provider}:{request.config.model}, 받은 Tool: {', '.join(t.name for t in request.tools) or '없음'})")
             print(f"      시스템 프롬프트: {first} …")
             print("      입력: " + describe(request.messages[-1]).replace("\n", "\n            "))
             response = script(request)
@@ -545,11 +551,11 @@ def walk_routing():
         )
         banner(f"{title}: /workflow routing {question}")
         outcome = WorkflowRunner(WORKFLOWS, context, InMemorySaver()).start("routing", question)
-        print(f"\n→ 경로: {outcome.route}\n  답: {outcome.answer}")
+        print(f"  ▸ 경로: {outcome.route}\n  답: {outcome.answer}")
 
 
 def walk_parallel(name):
-    """sectioning, voting(C15), orchestrator-workers(C16) 워크플로를 가짜 모델로 돌린다. 가지가 동시에 돌아 호출 순서가 정해지지 않으므로,
+    """sectioning, voting(C15), orchestrator-workers(C16), evaluator-optimizer(C17) 워크플로를 가짜 모델로 돌린다. 가지가 동시에 돌아 호출 순서가 정해지지 않으므로,
     가짜 모델은 순서가 아니라 시스템 프롬프트 첫 줄(에이전트)과 질문으로 답한다. 가지의 모델 호출은 1초씩 걸리게 해 동시에 도는 것을 보인다."""
     if name == "sectioning":
         question = "Skill은 어떻게 불러오고, 3의 12제곱은 얼마야?"
@@ -568,6 +574,15 @@ def walk_parallel(name):
             "최근 소식": [final("MCP 새 버전이 나왔다 [MCP 소식](https://modelcontextprotocol.io).")],
             "당신은 여러 자료를": [final("# Skill과 MCP\n## 요약\nSkill은 load_skill로, MCP Tool은 발견해서 쓴다.\n## Skill\nload_skill로 불러온다 [Skill, 불러오기].\n## MCP\n서버에서 발견한다 [Tool과 MCP, MCP].\n## 최근 소식\n새 버전 [MCP 소식](https://modelcontextprotocol.io).")],
         }
+    elif name == "evaluator-optimizer":
+        question = "이 프로젝트 문서에서 에이전트 루프의 최대 스텝은 어떻게 정해진다고 설명해?"
+        cited = "최대 스텝은 기본 10이고 AGENT_MAX_STEPS로 바꾼다 [에이전트 루프, 최대 스텝]."
+        answers = {  # 작성자(main)와 평가자는 차례로 부른다(동시에 돌지 않는다).
+            "당신은 도움이 되는": [ask("s1", "search_docs", query="최대 스텝"), final("최대 스텝은 기본 10이고 AGENT_MAX_STEPS로 바꾼다."),
+                              ask("s2", "search_docs", query="최대 스텝"), final(cited)],
+            "당신은 평가자다": [final("질문에 답함: 통과 - 기본값과 바꾸는 법을 말했다\n근거에 맞음: 통과 - 근거와 같다\n출처: 실패 - 문장에 [문서 제목, 위치]가 없다\n간결: 통과"),
+                          final("질문에 답함: 통과\n근거에 맞음: 통과\n출처: 통과 - [에이전트 루프, 최대 스텝]\n간결: 통과")],
+        }
     else:
         question = (KNOWLEDGE_DIR.parent / "evals/fixtures/sandbox/eval/injection-note.md").read_text(encoding="utf-8")
         answers = {"당신은 판정자다": [final("injection"), final("Injection."), final("clean")]}
@@ -577,25 +592,44 @@ def walk_parallel(name):
         sys.stdout.write(text + "\n")
         sys.stdout.flush()
 
-    def llm(request, on_text_delta=None):
+    def llm(request, on_text_delta=None, agent=None):
         first = (request.system_prompt or "").splitlines()[0]
         asked = request.messages[0].content
         with lock:  # 가지들이 같은 응답 목록을 나눠 쓴다.
             key = next((k for k in answers if first.startswith(k)), None) or next(k for k in answers if k in asked)  # 에이전트가 먼저
             response = answers[key].pop(0) if len(answers[key]) > 1 else answers[key][0]
-        if not first.startswith(("당신은 질문을 나눠", "당신은 작업을 나눠", "당신은 여러 자료를")):
+        if name != "evaluator-optimizer" and not first.startswith(("당신은 질문을 나눠", "당신은 작업을 나눠", "당신은 여러 자료를")):
             time.sleep(1)  # 가지의 모델 호출 한 번이 1초 걸린다고 치자.
-        out = [f"{c.name}({c.arguments})" for c in response.tool_calls] or [response.text or ""]
-        say(f"    모델 호출: {first} …\n      입력: {describe(request.messages[-1])[:60]}\n      출력: {out[0]}")
+        lines = []
+        last = max((i for i, m in enumerate(request.messages) if m.role == "assistant"), default=-1)
+        if last >= 0:  # 지난 스텝에 요청한 Tool이 실행됐고, 그 결과가 이번 호출의 입력으로 들어온다.
+            calls = {c.id: c for c in request.messages[last].tool_calls}
+            for m in request.messages[last + 1 :]:
+                call = calls[m.tool_call_id]
+                lines += [f"    • Tool 실행 [{agent}]: {call.name}", f"        - 입력: {call.arguments}", f"        - 출력: {clip(m.content, 60)}"]
+        given = "위 Tool의 결과" if request.messages[-1].role == "tool" else describe(request.messages[-1])[:60]
+        out = [f"Tool 요청 {c.name}({c.arguments})" for c in response.tool_calls] or [(response.text or "").replace("\n", "\n                  ")]
+        lines += [f"    • 모델 호출 [{agent}]: {first} …", f"        - 입력: {given}", f"        - 출력: {out[0]}"]
+        say("\n".join(lines))
         return response
 
-    team = AgentTeam(load_agents(Path(__file__).resolve().parent.parent / "agents"))
+    team = AgentTeam(load_agents(Path(__file__).resolve().parent.parent / "agents"), wrap_llm=tag_agent)
     base = AgentConfig(llm_config=LLMConfig(provider="scenario", model="scenario", max_output_tokens=None), tools=BUILTIN_TOOLS, llm=llm)
-    context = WorkflowContext(config=team.config_for(MAIN, base), team=team, base=base, progress=lambda message: say("  ▸ " + message.replace("\n", "\n    ")))
+    knowledge = None
+    if name == "evaluator-optimizer":  # 가짜 임베딩으로 knowledge/를 색인한다(네트워크 없음). 코드 출처 검사도 보인다.
+        index = KnowledgeIndex(":memory:", HashingEmbedder())
+        index.refresh(KNOWLEDGE_DIR)
+        knowledge = Knowledge(store=index, seen=set(), files=1, chunks=1)
+    context = WorkflowContext(
+        config=team.config_for(MAIN, base), knowledge=knowledge, team=team, base=base, progress=lambda message: say("  ▸ " + message.replace("\n", "\n    "))
+    )
     banner(f"/workflow {name} {question.splitlines()[0]}")
     started = time.perf_counter()
     outcome = WorkflowRunner(WORKFLOWS, context, InMemorySaver()).start(name, question)
-    print(f"\n→ 걸린 시간 {time.perf_counter() - started:.1f}초 (가지의 모델 호출은 1초씩. 차례로 돌았다면 그 합만큼 걸린다)\n  답:\n{outcome.answer}")
+    if name == "evaluator-optimizer":
+        print(f"  ▸ 워크플로 끝: {outcome.status} (고쳐 쓴 횟수 {outcome.revisions})\n\n  답:\n{outcome.answer}")
+        return
+    print(f"  ▸ 걸린 시간 {time.perf_counter() - started:.1f}초 (가지의 모델 호출은 1초씩. 차례로 돌았다면 그 합만큼 걸린다)\n  답:\n{outcome.answer}")
 
 
 def walk_workflow():
@@ -622,7 +656,7 @@ def walk_workflow():
         conn = sqlite3.connect(db, check_same_thread=False)
         waiting = runner(conn).start("answer-check", "Tool은 무엇으로 정의하나?")
         show_workflow_trace(trace)
-        print(f"\n→ 상태: {waiting.status}, 고쳐 쓴 횟수 {waiting.revisions}\n   초안: {waiting.draft}")
+        print(f"  ▸ 상태: {waiting.status}, 고쳐 쓴 횟수 {waiting.revisions}\n   초안: {waiting.draft}")
         conn.close()
 
         banner("프로그램을 껐다 켬: 새 DB 연결과 새 실행기")
@@ -631,7 +665,7 @@ def walk_workflow():
         [found] = restarted.pending()
         print(f"/workflows → 승인 대기 1개: {found.run_id} ({found.question})")
         done = restarted.resume(found.run_id, "approve")
-        print(f"/workflow-resume 1 → 1) 승인\n→ 상태: {done.status}, 답: {done.answer}")
+        print(f"/workflow-resume 1 → 1) 승인\n  ▸ 상태: {done.status}, 답: {done.answer}")
         print("   (재개할 때 모델을 다시 부르지 않았다. 체크포인트에 저장된 초안을 그대로 썼다)")
         conn.close()
 

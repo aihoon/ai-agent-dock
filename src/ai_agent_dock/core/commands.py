@@ -325,7 +325,7 @@ def _memory_delete(ctx: CommandContext, arg: str) -> str:
     return f"{n}번을 지웠습니다. 다음 턴부터 반영합니다."
 
 
-STATUS = {"approved": "승인", "rejected": "거부", "no_evidence": "근거 없음", "completed": "완료", "gate_failed": "gate 실패"}
+STATUS = {"approved": "승인", "rejected": "거부", "no_evidence": "근거 없음", "completed": "완료", "gate_failed": "gate 실패", "passed": "통과", "limit": "상한", "eval_failed": "평가 오류"}
 
 
 def _report(ctx: CommandContext, outcome: Outcome) -> str:
@@ -339,7 +339,7 @@ def _report(ctx: CommandContext, outcome: Outcome) -> str:
         ctx.ensure_record(auto_name(outcome.question))
         ctx.save()
     label = STATUS.get(outcome.status, outcome.status)
-    return f"워크플로 끝: {label} (고쳐 쓴 횟수 {outcome.revisions})" + (f"\n{outcome.answer}" if outcome.answer else "")
+    return f"▸ 워크플로 끝: {label} (고쳐 쓴 횟수 {outcome.revisions})" + (f"\n{outcome.answer}" if outcome.answer else "")
 
 
 def _no_workflows(ctx: CommandContext) -> str | None:

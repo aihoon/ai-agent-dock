@@ -16,9 +16,10 @@ from typing import Annotated, TypedDict
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
-from ..core.agents import DELEGATE, MAIN
+from ..core.agents import MAIN
 from ..core.orchestration import Workflow, WorkflowContext, ask_agent
 from ..core.retrieval import check_citations
+from ..core.tools import Node, tools_for
 from .common import AgentSlot, branch_config, clean_label, slot_config
 
 NAME = "orchestrator-workers"
@@ -32,7 +33,6 @@ WORKERS = [
     AgentSlot("utility", "계산, 지금 시각과 날짜", agent=MAIN, model="openai:gpt-6-luna", tools=("calculate", "get_current_time")),
 ]
 MAX_TASKS = 5
-NO_ASKING = {"ask_user", DELEGATE}  # 동시에 도는 가지가 사람에게 묻거나 다시 맡기지 않는다.
 FORMAT = "질문에 맞는 형식으로 합친다. 질문이 보고서를 원하면 제목, 요약(3~5줄), 작업마다 절 하나로 쓴다."
 ONLY_MINE = "원래 질문은 목적을 알려 주려고 넘긴다. 맡은 작업만 하고, 나머지는 다른 worker가 맡는다."  # Q22
 LEADING = re.compile(r"^\s*(?:[-*•]|\d+[.)])?\s*")  # 줄 앞의 목록 기호와 번호
@@ -112,7 +112,7 @@ def build(ctx: WorkflowContext) -> StateGraph:
     def run_worker(task: dict) -> State:
         branch = branch_name(task)
         config = ctx.config if task["worker"] == FALLBACK else slot_config(ctx, slots[task["worker"]])
-        tools = [t for t in config.tools if t.read_only and t.trusted and t.name not in NO_ASKING]
+        tools = tools_for(config.tools, node=Node(branch=True))  # 가지는 되묻거나 다시 맡기지 않고, 승인이 필요 없는 Tool만(Q14)
         try:
             answer, ok = ask_agent(branch_config(ctx, replace(config, tools=tools), branch, NAME), worker_prompt(task["question"], task["task"])), True
             ctx.progress(f"{branch} 완료")

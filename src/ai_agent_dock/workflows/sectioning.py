@@ -19,6 +19,7 @@ from langgraph.types import Send
 from ..core.agents import MAIN
 from ..core.orchestration import Workflow, WorkflowContext, ask_agent
 from ..core.retrieval import check_citations
+from ..core.tools import Node, tools_for
 from .common import AgentSlot, branch_config, clean_label, slot_config
 
 SELECTOR = "selector"
@@ -97,7 +98,7 @@ def build(ctx: WorkflowContext) -> StateGraph:
     def run_route(section: dict) -> State:
         route = slots[section["route"]]
         config = slot_config(ctx, route)
-        tools = [t for t in config.tools if t.read_only and t.trusted]  # 승인을 묻는 Tool은 뺀다(5.3).
+        tools = tools_for(config.tools, node=Node(branch=True))  # 승인을 묻는 Tool은 뺀다(5.3).
         try:
             answer = ask_agent(branch_config(ctx, replace(config, tools=tools), route.name, "sectioning"), section["question"])
             ctx.progress(f"{route.name} 완료")

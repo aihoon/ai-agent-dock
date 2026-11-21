@@ -3,7 +3,7 @@
     "time": {
       "command": "uvx",
       "args": [
-        "mcp-server-time"
+        "mcp-server-time==2026.11.18"
       ],
       "trusted": true,
       "enabled": true
@@ -12,7 +12,7 @@
       "command": "npx",
       "args": [
         "-y",
-        "@modelcontextprotocol/server-filesystem",
+        "@modelcontextprotocol/server-filesystem@2.4.0",
         "data/sandbox"
       ],
       "trusted": true,
@@ -22,7 +22,7 @@
       "command": "npx",
       "args": [
         "-y",
-        "tavily-mcp@latest"
+        "tavily-mcp@0.2.22"
       ],
       "env": {
         "TAVILY_API_KEY": "${TAVILY_API_KEY}"

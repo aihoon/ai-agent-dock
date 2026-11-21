@@ -49,8 +49,9 @@ WHO = {
     "당신은 웹 검색을": "web",
     "당신은 작업을 나눠": "orchestrator",  # C16
     "당신은 조사 담당": "researcher",
+    "당신은 평가자다": "evaluator",  # C17
 }
-NOT_BRANCHES = ("selector", "aggregator", "orchestrator")  # 나누고 합치는 에이전트는 가지가 아니다.
+NOT_BRANCHES = ("selector", "aggregator", "orchestrator", "evaluator")  # 나누고 합치는 에이전트는 가지가 아니다.
 
 
 class ByContent:
@@ -80,12 +81,14 @@ class ByContent:
         return [r for a, r in self.requests if a == agent]
 
 
-def start(name, text, llm, tools=POOL, tracer=None, knowledge=None):
+def start(name, text, llm, tools=POOL, tracer=None, knowledge=None, max_revisions=4):
     """(결과, 진행 줄)."""
     team = AgentTeam(load_agents(AGENTS))
     base = AgentConfig(llm_config=TEST_CONFIG, tools=list(tools), llm=llm, tracer=tracer)
     lines = []
-    context = WorkflowContext(config=team.config_for(MAIN, base), knowledge=knowledge, team=team, base=base, progress=lines.append)
+    context = WorkflowContext(
+        config=team.config_for(MAIN, base), knowledge=knowledge, team=team, base=base, progress=lines.append, max_revisions=max_revisions
+    )
     return WorkflowRunner(WORKFLOWS, context, InMemorySaver()).start(name, text), lines
 
 
@@ -282,12 +285,21 @@ def test_evaluate_keeps_each_voting_run_for_the_stability_comparison():
     assert [v.split(" (")[0] for v in result.verdicts] == ["injection", "clean"] and all(v.count(",") == 2 for v in result.verdicts)
 
 
-def test_workflows_do_not_import_each_other():  # 표는 따로, 도구만 workflows/common.py에서(Q20)
+def test_workflows_do_not_import_each_other():  # 표는 따로, 도구만 workflows/common.py에서(Q20). C17에서 모든 워크플로로 넓혔다
     folder = Path(__file__).resolve().parent.parent / "src" / "ai_agent_dock" / "workflows"
-    for name in ("routing", "sectioning", "voting"):
+    names = sorted(p.stem for p in folder.glob("*.py") if p.stem not in ("__init__", "common"))
+    assert len(names) == 7
+    for name in names:
         text = (folder / f"{name}.py").read_text(encoding="utf-8")
-        others = [o for o in ("routing", "sectioning", "voting") if o != name and f"from .{o} import" in text]
-        assert others == [], name
+        assert [o for o in names if o != name and f"from .{o} import" in text] == [], name
+
+
+def test_keep_results_collects_tool_name_and_result():  # C17 Q19
+    from ai_agent_dock.workflows.common import keep_results
+
+    sink = []
+    [calc] = keep_results([POOL[0]], sink)
+    assert calc.func(q="1") == "ok" and sink == [("calculate", "ok")]
 
 
 def test_branches_show_route_and_ballot_names_to_the_app():  # 진행 줄에 [docs], [judge1]처럼 보인다(Q25)

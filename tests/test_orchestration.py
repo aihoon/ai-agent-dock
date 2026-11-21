@@ -169,7 +169,7 @@ def test_workflow_command_waits_for_approval_and_approved_result_joins_the_chat(
     assert ctx.session.history == []  # 중간 단계는 채팅 이력에 넣지 않는다.
 
     done = ctx.answer_workflow("approve")
-    assert done.startswith("워크플로 끝: 승인") and ctx.waiting is None
+    assert done.startswith("▸ 워크플로 끝: 승인") and ctx.waiting is None
     assert [m.role for m in ctx.session.history] == ["user", "assistant"]
     assert ctx.session.history[0].content == "최대 스텝은?" and ctx.store.list()  # 세션도 저장된다.
 
@@ -177,7 +177,7 @@ def test_workflow_command_waits_for_approval_and_approved_result_joins_the_chat(
 def test_rejected_workflow_does_not_join_the_chat(tmp_path):
     ctx = make_ctx(tmp_path, cited_answer())
     run(ctx, "/workflow answer-check 최대 스텝은?")
-    assert ctx.answer_workflow("reject") == "워크플로 끝: 거부 (고쳐 쓴 횟수 0)"
+    assert ctx.answer_workflow("reject") == "▸ 워크플로 끝: 거부 (고쳐 쓴 횟수 0)"
     assert ctx.session.history == []
 
 

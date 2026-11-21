@@ -13,12 +13,13 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
 from ..core.orchestration import Workflow, WorkflowContext, ask_agent
-from ..core.retrieval import check_citations, make_search_docs_tool
+from ..core.retrieval import check_citations
+from ..core.tools import Node, tools_for
+from .common import docs_tool
 
 NO_EVIDENCE = "관련 문서에서 근거를 찾지 못했습니다."
-# 되묻기는 노드 안에서 일어나 체크포인트에 남지 않는다. 방향은 승인 단계의 다르게 요청으로 바꾼다(C10 D23).
-# 맡기기(delegate, C12)도 뺀다. 맡은 에이전트의 검색은 이 노드의 출처 집합(seen)에 남지 않아 출처 검사가 틀어진다.
-EXCLUDED_TOOLS = {"ask_user", "delegate"}
+# 되묻기와 맡기기는 노드 규칙(tools_for의 Node)이 뺀다. 방향은 승인 단계의 다르게 요청으로 바꾸고(C10 D23),
+# 맡은 에이전트의 검색은 이 노드의 출처 집합(seen)에 남지 않아 출처 검사가 틀어지기 때문이다(C12).
 
 
 class State(TypedDict, total=False):
@@ -62,8 +63,8 @@ def build(ctx: WorkflowContext) -> StateGraph:
         feedback = state.get("feedback")
         ctx.progress(f"답 다시 작성 (고칠 점: {feedback[-1]})" if feedback else "답 작성")
         seen: set[str] = set()
-        search = make_search_docs_tool(ctx.knowledge.store, seen)
-        tools = [t for t in ctx.config.tools if t.name not in EXCLUDED_TOOLS | {search.name}] + [search]
+        search = docs_tool(ctx, seen)
+        tools = [t for t in tools_for(ctx.config.tools, node=Node()) if t.name != search.name] + [search]
         draft = ask_agent(replace(ctx.config, tools=tools), prompt_for(state))
         return {"draft": draft, "seen": sorted(seen)}
 

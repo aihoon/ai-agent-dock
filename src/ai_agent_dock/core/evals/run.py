@@ -15,6 +15,7 @@ from ..llm import Message, ToolCall
 from ..orchestration import WAITING, Outcome, WorkflowRunner
 from ..runtime.loop import run_agent
 from ..runtime.types import AgentResult, AgentConfig
+from .rubric import FAIL, evaluator_prompt, read_verdicts, tool_evidence, verdict_line
 from .score import Case, called_tools, check, check_workflow
 
 
@@ -28,6 +29,8 @@ class CaseResult:
     tools: list[str] = field(default_factory=list)  # 마지막 실행에서 부른 Tool
     answer: str | None = None  # 마지막 실행의 답
     verdicts: list[str] = field(default_factory=list)  # voting 실행마다 "판정 (표 1, 표 2, 표 3)". 판정자 1번과 다수결의 흔들림을 비교한다(C15).
+    llm_verdicts: list[str] = field(default_factory=list)  # llm_judge 실행마다 "통과 3/4 (실패: 출처 - 이유)" 또는 "오류: …"(C17 Q17)
+    disagreements: int = 0  # 규칙 판정과 LLM 판정이 어긋난 실행 수. 오류와 판정 안 한 기준은 세지 않는다.
 
     @property
     def passed(self) -> bool:
@@ -60,6 +63,7 @@ def evaluate(
     compactor: Callable[[list[Message]], list[Message]] | None = None,
     workflows: Callable[[AgentConfig], WorkflowRunner] | None = None,
     delegated: Callable[[], list[AgentResult]] | None = None,
+    judge: Callable[[str], str] | None = None,
 ) -> CaseResult:
     """케이스를 repeat번 실행한다. 실행마다 설정을 새로 만든다(미리 적은 답이 실행마다 처음부터 쓰이도록).
 
@@ -67,6 +71,7 @@ def evaluate(
     판정은 마지막 질문의 턴만 본다(앞선 턴의 Tool 호출은 세지 않는다).
     workflow가 있으면 질문을 워크플로로 실행하고, 승인 단계에는 workflow_decisions를 차례로 답한다(C10 D22).
     delegated는 그동안 맡긴 하위 에이전트의 결과를 꺼내고 비우는 함수다(C12). 마지막 질문의 것만 판정에 쓴다.
+    judge는 evaluator에게 평가자 프롬프트를 주고 답을 받는 함수다(C17). llm_judge 케이스에서 실행마다 부르고 기록만 한다.
     """
     take = delegated or (lambda: [])
     outcome = CaseResult(id=case.id, category=case.category, runs=repeat, passes=0)
@@ -77,6 +82,8 @@ def evaluate(
             outcome.answer = result.answer
             if result.verdict:
                 outcome.verdicts.append(f"{result.verdict} ({', '.join(result.ballots or [])})")
+            if case.llm_judge and judge:  # 워크플로는 이력이 없어 근거 없이 본다(Q16). None은 "넘기지 못함"(Q29)
+                record_llm_judge(outcome, judge, evaluator_prompt(case.question, result.answer or "", None), not failures)
             if failures:
                 outcome.failures = failures
             else:
@@ -94,11 +101,25 @@ def evaluate(
         failures = check(case, result, children)
         outcome.tools = called_tools(result) + [name for c in children for name in called_tools(c)]
         outcome.answer = result.answer
+        if case.llm_judge and judge:
+            evidence = tool_evidence(result.history) + [e for c in children for e in tool_evidence(c.history)]
+            record_llm_judge(outcome, judge, evaluator_prompt(case.question, result.answer or "", evidence), not failures)
         if failures:
             outcome.failures = failures
         else:
             outcome.passes += 1
     return outcome
+
+
+def record_llm_judge(outcome: CaseResult, judge: Callable[[str], str], prompt: str, rule_passed: bool) -> None:
+    """LLM 판정 한 번을 기록하고, 규칙 판정과 어긋나면 센다. 평가자 호출이 실패하면 \"오류\"만 남긴다(Q18)."""
+    try:
+        verdicts = read_verdicts(judge(prompt))
+    except Exception as e:
+        outcome.llm_verdicts.append(f"오류: {type(e).__name__}")
+        return
+    outcome.llm_verdicts.append(verdict_line(verdicts))
+    outcome.disagreements += rule_passed == any(v.result == FAIL for v in verdicts)
 
 
 def run_workflow_case(case: Case, runner: WorkflowRunner) -> tuple[list[str], Outcome]:
@@ -151,4 +172,8 @@ def summarize(results: list[CaseResult], regressed: set[str]) -> str:
             lines.append(f"  실패 {r.id}{mark} ({r.passes}/{r.runs}): {'; '.join(r.failures)}")
     if regressed:
         lines.append(f"회귀 {len(regressed)}개: {', '.join(sorted(regressed))}")
+    judged = [r for r in results if r.llm_verdicts]
+    if judged:  # 기록만 한다. 통과율에는 넣지 않는다(C17 Q6, Q17).
+        off = [r for r in judged if r.disagreements]
+        lines.append(f"LLM 판정: {len(judged)}케이스, 규칙 판정과 어긋남 {sum(r.disagreements for r in off)}번 ({', '.join(r.id for r in off) or '없음'})")
     return "\n".join(lines)

@@ -14,8 +14,9 @@ from typing import TypedDict
 from langgraph.graph import END, START, StateGraph
 
 from ..core.orchestration import Workflow, WorkflowContext, ask_agent
-from ..core.retrieval import check_citations, make_search_docs_tool
-from .answer_check import EXCLUDED_TOOLS, unavailable
+from ..core.retrieval import check_citations
+from ..core.tools import Node, tools_for
+from .common import docs_tool, keep_results
 
 MIN_ITEMS, MAX_ITEMS = 2, 5  # 개요 항목 수(Q3). 짧은 문서는 2개가 자연스러워 C14에서 3을 2로 내렸다
 ITEM = re.compile(r"^\s*(?:[-*]|\d+[.)])\s+(.+)$")  # 줄 머리의 -, *, 1. 을 항목으로 센다
@@ -72,16 +73,11 @@ def build(ctx: WorkflowContext) -> StateGraph:
     def outline(state: State) -> State:
         ctx.progress("개요 작성")
         seen: set[str] = set()
-        results: list[str] = []
-        search = make_search_docs_tool(ctx.knowledge.store, seen)
-
-        def search_and_keep(query: str) -> str:  # 검색 결과 글을 본문 단계의 근거로 모아 둔다.
-            results.append(search.func(query=query))
-            return results[-1]
-
-        tools = [t for t in ctx.config.tools if t.name not in EXCLUDED_TOOLS | {search.name}] + [replace(search, func=search_and_keep)]
+        results: list[tuple[str, str]] = []
+        search = docs_tool(ctx, seen)
+        tools = [t for t in tools_for(ctx.config.tools, node=Node()) if t.name != search.name] + keep_results([search], results)  # 검색 결과 글을 본문 단계의 근거로
         text = ask_agent(replace(ctx.config, tools=tools), outline_prompt(state["question"]))
-        return {"outline": text, "evidence": "\n\n".join(results), "seen": sorted(seen)}
+        return {"outline": text, "evidence": "\n\n".join(result for _, result in results), "seen": sorted(seen)}
 
     def gate(state: State) -> State:
         outline_text = state.get("outline", "")
@@ -103,6 +99,12 @@ def build(ctx: WorkflowContext) -> StateGraph:
     graph.add_conditional_edges("gate", lambda state: END if state.get("problem") else "write", ["write", END])
     graph.add_edge("write", END)
     return graph
+
+
+def unavailable(ctx: WorkflowContext) -> str | None:
+    if ctx.knowledge is None:
+        return "문서 색인이 없습니다. uv run python scripts/index_knowledge.py 를 먼저 실행하세요."
+    return None
 
 
 WORKFLOW = Workflow(

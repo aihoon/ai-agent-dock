@@ -46,6 +46,7 @@ class Case:
     expect_route: str | None = None  # routing 워크플로가 골라야 할 경로(C14 Q8)
     expect_routes: list[str] | None = None  # sectioning이 골라야 할 경로들. 순서는 보지 않는다(C15)
     expect_verdict: str | None = None  # voting의 판정: injection, clean, unsure(C15)
+    llm_judge: bool = False  # True면 규칙 판정과 함께 evaluator의 LLM 판정을 기록한다. 통과/실패에는 넣지 않는다(C17 Q6, Q15)
     expect_workers: list[str] | None = None  # orchestrator-workers가 한 번 이상 써야 할 worker. 순서, 개수, 다른 worker는 보지 않는다(C16 Q17)
 
 

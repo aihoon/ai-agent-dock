@@ -60,3 +60,21 @@ def test_failing_gate_stops_before_writing():
 
     assert result.status == "gate_failed" and "개요 항목 0개" in result.answer
     assert len(seen_tools) == 2  # 개요 단계의 호출 두 번뿐, 본문 단계는 부르지 않았다(Q4)
+
+
+def test_swapped_search_docs_keeps_app_progress_line():  # C17 Q27: 노드가 바꾼 search_docs도 응용의 진행 줄을 지난다
+    from dataclasses import replace
+
+    ran = []
+
+    def wrap_tool(tool):
+        def traced(**arguments):
+            ran.append(tool.name)
+            return tool.func(**arguments)
+
+        return replace(tool, func=traced)
+
+    config = AgentConfig(llm_config=TEST_CONFIG, tools=list(BUILTIN_TOOLS), llm=FakeLLM([tool_call("s1", "search_docs", query="최대 스텝"), final(OUTLINE), final("본문")]))
+    context = WorkflowContext(config=config, knowledge=Knowledge(store=FakeStore(), seen=set(), files=1, chunks=1), wrap_tool=wrap_tool)
+    outcome = WorkflowRunner(WORKFLOWS, context, InMemorySaver()).start("prompt-chaining", "최대 스텝은?")
+    assert ran == ["search_docs"] and outcome.status == "completed"

@@ -18,14 +18,14 @@ from ai_agent_dock.core.llm import LLMRequest, UserMessage, call_llm, config_fro
 from ai_agent_dock.core.llm.tokens import request_tokens
 from ai_agent_dock.core.session.compact import compact
 from ai_agent_dock.core.observability import Tracer, new_session_id
-from ai_agent_dock.core.orchestration import WorkflowContext, WorkflowRunner
+from ai_agent_dock.core.evals.rubric import EVALUATOR
+from ai_agent_dock.core.orchestration import WorkflowContext, WorkflowRunner, ask_agent
 from ai_agent_dock.core.retrieval import KnowledgeIndex, OpenAIEmbedder, open_knowledge
 from ai_agent_dock.core.runtime.types import AgentConfig
 from ai_agent_dock.core.safety import load_safety_policy, with_safety
 from ai_agent_dock.core.skills import scan_skills
-from ai_agent_dock.core.toolkit import make_builtin_tools
-from ai_agent_dock.core.tools import DEFAULT_MAX_RESULT_CHARS, ToolRegistry
-from ai_agent_dock.env import env_bool, env_float, env_int, env_str
+from ai_agent_dock.core.tools import DEFAULT_MAX_RESULT_CHARS, build_pool, connect_mcp
+from ai_agent_dock.env import env_bool, env_int, env_str
 from ai_agent_dock.workflows import WORKFLOWS
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -45,24 +45,6 @@ def prepare_fixtures():
     return open_knowledge(path)
 
 pytestmark = pytest.mark.live
-
-
-def connect_mcp(stack: ExitStack) -> dict:
-    """mcp.json(또는 MCP_CONFIG)에 적은 서버에 연결한다. 설정 파일이 없으면 MCP 툴 없이 평가한다."""
-    path = Path(env_str("MCP_CONFIG", "") or ROOT / "mcp.json")
-    if not path.is_file():
-        return {}
-    from ai_agent_dock.core.tools.mcp import connect_mcp_servers, load_config
-
-    servers = load_config(path)
-    servers.pop("web", None)  # 평가는 웹 검색(Tavily)에 기대지 않는다. 결과가 매번 달라진다(C12 Q13).
-    return stack.enter_context(
-        connect_mcp_servers(
-            servers,
-            call_timeout=env_float("MCP_TOOL_TIMEOUT", 30.0),
-            start_timeout=env_float("MCP_START_TIMEOUT", 60.0),
-        )
-    )
 
 
 def test_cases_with_real_model(request):
@@ -95,21 +77,19 @@ def test_cases_with_real_model(request):
     tracer = Tracer(ROOT / "logs" / "sessions" if env_bool("TRACE_ENABLED", True) else None, session_id=run_id)
 
     with ExitStack() as stack:
-        mcp_tools = connect_mcp(stack)
+        mcp_path = Path(env_str("MCP_CONFIG", "") or ROOT / "mcp.json")  # 설정 파일이 없으면 MCP Tool 없이 평가한다.
+        # 평가는 웹 검색(Tavily)에 기대지 않는다. 결과가 매번 달라진다(C12 Q13).
+        mcp_tools = connect_mcp(stack, mcp_path if mcp_path.is_file() else None, skip_servers=("web",))
         policy = load_safety_policy(FIXTURES / "safety.json") if "files" in mcp_tools else None  # 안전 정책은 파일 서버 Tool을 막는다.
 
         last = {}  # 마지막으로 만든 base. evaluate는 make_config(case) 바로 뒤에 workflows를 부른다.
 
         def make_config(case):
             kb = fixture_knowledge if case.knowledge == "fixtures" else knowledge
-            registry = ToolRegistry(max_result_chars=env_int("TOOL_RESULT_MAX_CHARS", DEFAULT_MAX_RESULT_CHARS))
-            for source, tool in make_builtin_tools(skills=skills, knowledge=kb, input_fn=scripted_input(case.user_inputs)):
-                registry.add(tool, source=source)
-            for server, tools in mcp_tools.items():
-                registry.add_all(tools, source=f"mcp:{server}")
+            pool = build_pool(skills=skills, knowledge=kb, mcp_tools=mcp_tools, input_fn=scripted_input(case.user_inputs))  # 채팅과 같은 pool(C17 Q21)
             config = AgentConfig(
                 llm_config=llm_config,
-                tools=registry.tools(),
+                tools=pool.tools(),
                 approve=scripted_approver(case.approvals),  # 하위 에이전트의 승인도 Tool 이름으로 답한다.
                 tracer=tracer,
             )
@@ -134,12 +114,16 @@ def test_cases_with_real_model(request):
 
         def workflows(config):  # 워크플로 케이스(C10): 체크포인트는 메모리에 둔다(평가는 재개하지 않는다).
             context = WorkflowContext(
-                config=config, knowledge=knowledge, max_revisions=env_int("WORKFLOW_MAX_REVISIONS", 2), team=team, base=last["base"]
+                config=config, knowledge=knowledge, max_revisions=env_int("WORKFLOW_MAX_REVISIONS", 4), team=team, base=last["base"]
             )
             return WorkflowRunner(WORKFLOWS, context, InMemorySaver())
 
+        def judge(prompt):  # llm_judge 케이스의 LLM 판정(C17). 기록만 하고 통과/실패에는 넣지 않는다.
+            return ask_agent(team.config_for(EVALUATOR, last["base"]), prompt)
+
         results = [
-            evaluate(case, make_config, repeat, compactor=compactor, workflows=workflows, delegated=take_delegated) for case in cases
+            evaluate(case, make_config, repeat, compactor=compactor, workflows=workflows, delegated=take_delegated, judge=judge)
+            for case in cases
         ]
 
     results_dir = ROOT / "data" / "evals"

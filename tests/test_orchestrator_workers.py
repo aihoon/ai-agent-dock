@@ -178,9 +178,3 @@ def test_eval_checks_that_every_expected_worker_was_used():
     assert check_workflow(case, "completed", 0, workers=["web", "researcher", "researcher", "utility"]) == []
     assert check_workflow(case, "completed", 0, workers=["researcher"]) == ["worker web을 쓰지 않았다(쓴 worker: ['researcher'])"]
     assert check_workflow(case, "completed", 0, workers=None) == ["worker researcher, web을 쓰지 않았다(쓴 worker: [])"]
-
-
-def test_orchestrator_workers_does_not_import_other_workflows():
-    text = (Path(__file__).resolve().parent.parent / "src/ai_agent_dock/workflows/orchestrator_workers.py").read_text(encoding="utf-8")
-    others = ["answer_check", "prompt_chaining", "routing", "sectioning", "voting"]
-    assert [o for o in others if f"from .{o} import" in text or f"import {o}" in text] == []

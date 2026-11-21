@@ -21,15 +21,13 @@ from ..observability import Tracer
 from ..runtime.loop import run_agent
 from ..runtime.types import AgentResult, AgentConfig
 from ..skills import SkillMeta
-from ..tools import DEFAULT_MAX_RESULT_CHARS, ToolRegistry
-from .loader import MAIN, matches, select_tools
+from ..tools import DEFAULT_MAX_RESULT_CHARS, DELEGATE, ToolRegistry, matches, tools_for
+from ..tools.assemble import GLOB
+from .loader import MAIN
 from .system_prompt import build_system_prompt
 from .types import AgentSpec, AgentFormatError
 
-DELEGATE = "delegate"
-PARENT_ONLY = {"ask_user", "load_skill"}  # 되묻기와 스킬은 main만 쓴다. 하위 에이전트는 사용자를 볼 수 없다.
 MAX_DEPTH = 3  # SUBAGENT_MAX_DEPTH의 최대값
-GLOB = "*?["
 
 
 @dataclass
@@ -56,7 +54,7 @@ class AgentTeam:
         for agent in self.agents.values():
             if agent.name == MAIN:
                 continue
-            writes = [t.name for t in self._tools_of(agent, tools, depth=1) if not t.read_only]
+            writes = [t.name for t in tools_for(tools, patterns=agent.tools, depth=1) if not t.read_only]
             if writes and agent.delegate:  # 맡길 수 없는 에이전트(경로 전용)는 하위 에이전트가 아니다.
                 raise AgentFormatError(
                     f"{agent.path}: 하위 에이전트는 읽기 전용 Tool만 쓴다(C12 D2): {', '.join(writes)}. "
@@ -94,10 +92,8 @@ class AgentTeam:
         agent = self.agents[name]
         if depth == 0:
             tracer = base.tracer
-        tools = self._tools_of(agent, base.tools, depth)
-        if only is not None:
-            only = list(only)
-            tools = select_tools(only, tools)
+        only = list(only) if only is not None else None
+        tools = tools_for(base.tools, patterns=agent.tools, depth=depth, only=only)  # Tool은 core/tools에서 정한다(C17 Q22).
         targets = self.targets(name, depth, parents) if only is None or matches(only, DELEGATE) else []
         if targets:
             tools.append(self._delegate_tool(base, depth, (*parents, name), targets, tracer))
@@ -111,10 +107,6 @@ class AgentTeam:
         llm_config = model_config(agent.model, base.llm_config) if agent.model else base.llm_config
         llm = self.wrap_llm(name, base.llm) if self.wrap_llm else base.llm
         return replace(base, llm_config=llm_config, llm=llm, tools=tools, system_prompt=prompt, max_steps=max_steps, tracer=tracer, approve=approve)
-
-    def _tools_of(self, agent: AgentSpec, tools: list[Tool], depth: int) -> list[Tool]:
-        pool = tools if depth == 0 else [t for t in tools if t.name not in PARENT_ONLY]
-        return select_tools(agent.tools, pool)
 
     def _delegate_tool(
         self, base: AgentConfig, depth: int, chain: tuple[str, ...], targets: list[AgentSpec], tracer: Tracer | None

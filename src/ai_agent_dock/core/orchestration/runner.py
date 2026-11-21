@@ -16,6 +16,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import StateGraph
 from langgraph.types import Command
 
+from ..llm import Tool
 from ..observability import new_session_id
 from ..retrieval import Knowledge
 from ..runtime.loop import run_agent
@@ -34,10 +35,11 @@ class WorkflowContext:
 
     config: AgentConfig
     knowledge: Knowledge | None = None
-    max_revisions: int = 2  # WORKFLOW_MAX_REVISIONS(C10 D8)
+    max_revisions: int = 4  # WORKFLOW_MAX_REVISIONS(C10 D8). C17에서 2를 4로 올렸다
     progress: Callable[[str], None] = lambda message: None  # 노드가 알리는 진행 줄(C10 D24). 응용이 화면에 보여 준다.
     team: AgentTeam | None = None  # 에이전트 정의. 노드마다 다른 에이전트를 쓰는 워크플로(C14 routing)가 쓴다.
     base: AgentConfig | None = None  # 모든 에이전트가 함께 쓰는 설정(설치된 전체 Tool, 승인, Safety, 추적). team.config_for에 넘긴다.
+    wrap_tool: Callable[[Tool], Tool] = lambda tool: tool  # 노드가 새로 만든 Tool(search_docs)에 응용의 진행 줄을 붙인다(C17 Q27).
 
 
 @dataclass(frozen=True)

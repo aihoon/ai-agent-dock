@@ -8,8 +8,9 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 from ..core.agents import MAIN
-from ..core.llm import model_config
+from ..core.llm import Tool, model_config
 from ..core.orchestration import WorkflowContext
+from ..core.retrieval import make_search_docs_tool
 from ..core.runtime.types import AgentConfig
 
 
@@ -43,6 +44,26 @@ def branch_config(ctx: WorkflowContext, config: AgentConfig, name: str, workflow
     tracer = config.tracer.child(name, workflow) if config.tracer else None
     llm = ctx.team.wrap_llm(name, ctx.base.llm) if ctx.team.wrap_llm else config.llm
     return replace(config, tracer=tracer, llm=llm)
+
+
+def docs_tool(ctx: WorkflowContext, seen: set[str]) -> Tool:
+    """검색한 출처를 seen에 모으는 search_docs. 출처 검사를 하는 노드가 main의 search_docs 대신 쓴다.
+    새로 만든 Tool이라 응용의 진행 줄(ctx.wrap_tool)을 여기서 붙인다(C17 Q27)."""
+    return ctx.wrap_tool(make_search_docs_tool(ctx.knowledge.store, seen))
+
+
+def keep_results(tools: list[Tool], sink: list[tuple[str, str]]) -> list[Tool]:
+    """Tool을 감싸 실행할 때마다 (Tool 이름, 결과)를 sink에 모은다. 다음 단계나 평가자가 근거로 본다(C13, C17 Q19)."""
+
+    def keep(tool: Tool) -> Tool:
+        def run(**arguments):
+            result = tool.func(**arguments)
+            sink.append((tool.name, str(result)))
+            return result
+
+        return replace(tool, func=run)
+
+    return [keep(t) for t in tools]
 
 
 def clean_label(label: str) -> str:

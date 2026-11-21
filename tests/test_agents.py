@@ -7,7 +7,8 @@ from pathlib import Path
 import pytest
 from fakes import TEST_CONFIG, final, tool_call
 
-from ai_agent_dock.core.agents import AGENT_INDEX_HEAD, DELEGATE, MAIN, AgentFormatError, AgentTeam, load_agents, select_tools
+from ai_agent_dock.core.agents import AGENT_INDEX_HEAD, DELEGATE, MAIN, AgentFormatError, AgentTeam, load_agents
+from ai_agent_dock.core.tools import select_tools
 from ai_agent_dock.core.evals import Case, check
 from ai_agent_dock.core.hitl import Approval, ask_in_terminal
 from ai_agent_dock.core.llm import AssistantMessage, Tool, ToolCall, ToolMessage, UserMessage
@@ -56,7 +57,7 @@ def team_and_base(llm, tools=POOL, **team_args):
 
 def test_project_agents_load_and_main_keeps_the_old_base_prompt():
     agents = load_agents(AGENTS)
-    assert list(agents) == ["aggregator", "chat", "judge", MAIN, "orchestrator", "researcher", "router", "selector", "web"]  # chat, router, web은 C14, aggregator, judge, selector는 C15, orchestrator는 C16
+    assert list(agents) == ["aggregator", "chat", "evaluator", "judge", MAIN, "orchestrator", "researcher", "router", "selector", "web"]  # chat, router, web은 C14, aggregator, judge, selector는 C15, orchestrator는 C16, evaluator는 C17
     assert agents[MAIN].body.startswith("당신은 도움이 되는 어시스턴트다.")  # 예전 DEFAULT_SYSTEM_PROMPT를 글자 그대로 옮겼다(Q11).
     assert agents[MAIN].tools == ("*", "!web__*")
     assert agents["researcher"].max_steps == 6

@@ -37,8 +37,7 @@ from ai_agent_dock.core.safety import Safety, load_safety_policy, with_safety
 from ai_agent_dock.core.session import Session
 from ai_agent_dock.core.session.store import SessionStore
 from ai_agent_dock.core.skills import SkillMeta, scan_skills
-from ai_agent_dock.core.toolkit import make_builtin_tools
-from ai_agent_dock.core.tools import DEFAULT_MAX_RESULT_CHARS, ToolRegistry
+from ai_agent_dock.core.tools import DEFAULT_MAX_RESULT_CHARS, ToolRegistry, build_pool, connect_mcp
 from ai_agent_dock.env import env_bool, env_float, env_int, env_str
 from ai_agent_dock.workflows import WORKFLOWS
 
@@ -58,7 +57,7 @@ SETUP_STEPS = 7  # 시작 화면의 단계 수
 NAMES_LIMIT = 6  # 시작 화면에서 이름을 다 보여 줄 개수. 넘으면 개수만 보여 준다.
 BAR = "━" * 60
 RULE_MODE = {"deny": "막음(deny)", "ask": "승인 받기(ask)"}
-TOOL_SOURCE = {  # 내장 Tool의 출처(core/toolkit.py의 make_builtin_tools)
+TOOL_SOURCE = {  # 내장 Tool의 출처(core/tools/assemble.py의 make_builtin_tools)
     "builtin": "코드 core/tools, core/hitl",
     "skills": "skills/의 스킬이 있을 때",
     "knowledge": "문서 색인이 열렸을 때",
@@ -139,7 +138,7 @@ class Progress:
 
     def wrap_tool(self, tool: Tool) -> Tool:
         def traced(**kwargs):
-            self._say(f"  · Tool 실행: {tool.name}")
+            self._say(f"  · [tool] {tool.name}")
             return tool.func(**kwargs)
 
         return replace(tool, func=traced)
@@ -282,41 +281,29 @@ def main():
             keep_turns=env_int("COMPACT_KEEP_TURNS", 4),
             compact_warn_tokens=env_int("COMPACT_WARN_TOKENS", 100_000),
             memory_warn_tokens=env_int("MEMORY_WARN_TOKENS", 2_000),
-            workflows=make_workflows(stack, session.config, knowledge, progress.workflow_step, team=team, base=config),
+            workflows=make_workflows(stack, session.config, knowledge, progress, team=team, base=config),
             agents=team,
         )
         repl(session, ctx, progress, stream, safety)
 
 
 def build_registry(args, stack: ExitStack, *, skills: list[SkillMeta], knowledge: Knowledge | None) -> ToolRegistry:
-    """빌트인 Tool(core/toolkit가 조립)과, 설정 파일에 적은 MCP 서버의 Tool을 한 레지스트리에 모은다. 설정 파일이 없으면 빌트인 Tool만 쓴다."""
-    registry = ToolRegistry(max_result_chars=env_int("TOOL_RESULT_MAX_CHARS", DEFAULT_MAX_RESULT_CHARS))
-    for source, tool in make_builtin_tools(skills=skills, knowledge=knowledge):
-        registry.add(tool, source=source)
+    """설치된 Tool 전체(core/tools의 connect_mcp, build_pool)를 모으고 출처별로 보여 준다. 설정 파일이 없으면 빌트인 Tool만 쓴다."""
+    config_path = args.mcp_config or env_str("MCP_CONFIG", "")  # 우선순위: 인자 > 환경 변수 > 사용 안 함
+
+    def announce(count: int) -> None:
+        print(f"  MCP Tool: {config_path}의 켜진 서버 {count}개에 연결합니다(처음 실행은 패키지를 내려받느라 오래 걸릴 수 있습니다)...", flush=True)
+
+    connected = connect_mcp(stack, config_path, announce=announce)
+    registry = build_pool(skills=skills, knowledge=knowledge, mcp_tools=connected)
     print("  내장 Tool")
     for source, label in TOOL_SOURCE.items():
         found = [t.name for t in registry.tools() if registry.source_of(t.name) == source]
         if found:
             print(f"    {label}: {names(found)}")
-
-    config_path = args.mcp_config or env_str("MCP_CONFIG", "")  # 우선순위: 인자 > 환경 변수 > 사용 안 함
-    if config_path:
-        from ai_agent_dock.core.tools.mcp import connect_mcp_servers, load_config  # MCP SDK는 설정했을 때만 가져온다.
-
-        servers = load_config(config_path)
-        print(f"  MCP Tool: {config_path}의 켜진 서버 {len(servers)}개에 연결합니다(처음 실행은 패키지를 내려받느라 오래 걸릴 수 있습니다)...", flush=True)
-        connected = stack.enter_context(
-            connect_mcp_servers(
-                servers,
-                call_timeout=env_float("MCP_TOOL_TIMEOUT", 30.0),
-                start_timeout=env_float("MCP_START_TIMEOUT", 60.0),
-            )
-        )
-        for server, tools in connected.items():
-            registry.add_all(tools, source=f"mcp:{server}")
-            print(f"    서버 {server}: {names([t.name for t in tools])}")
-    else:
-        print("  MCP Tool: MCP_CONFIG가 없어 연결하지 않습니다")
+    print("  MCP Tool" if config_path else "  MCP Tool: MCP_CONFIG가 없어 연결하지 않습니다")
+    for server, tools in connected.items():
+        print(f"    서버 {server}: {names([t.name for t in tools])}")
     return registry
 
 
@@ -328,8 +315,10 @@ def make_workflows(stack: ExitStack, config: AgentConfig, knowledge: Knowledge |
     CHECKPOINT_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(CHECKPOINT_PATH, check_same_thread=False)
     stack.callback(conn.close)
-    max_revisions = env_int("WORKFLOW_MAX_REVISIONS", 2)
-    context = WorkflowContext(config=config, knowledge=knowledge, max_revisions=max_revisions, progress=progress, team=team, base=base)
+    max_revisions = env_int("WORKFLOW_MAX_REVISIONS", 4)
+    context = WorkflowContext(
+        config=config, knowledge=knowledge, max_revisions=max_revisions, progress=progress.workflow_step, team=team, base=base, wrap_tool=progress.wrap_tool
+    )
     return WorkflowRunner(WORKFLOWS, context, SqliteSaver(conn))
 
 
