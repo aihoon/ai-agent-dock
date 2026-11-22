@@ -52,7 +52,7 @@ SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"  # 프로젝트 �
 KNOWLEDGE_DIR = Path(__file__).resolve().parent.parent / "knowledge"  # 프로젝트 루트의 knowledge/(검색할 문서)
 INDEX_PATH = Path(__file__).resolve().parent.parent / "data" / "index.sqlite"  # 문서 색인(문서에서 다시 만들 수 있다). .env의 DOCS_INDEX로 바꿀 수 있다. data/는 git에서 제외한다.
 AGENTS_DIR = Path(__file__).resolve().parent.parent / "agents"  # 에이전트 정의(C12). .env의 AGENTS_DIR로 바꿀 수 있다.
-TASK_PREVIEW = 50  # 위임 진행 줄에 보여 줄 task 글자 수
+TASK_PREVIEW = 50  # 위임 call message에 보여 줄 task 글자 수
 SETUP_STEPS = 7  # 시작 화면의 단계 수
 NAMES_LIMIT = 6  # 시작 화면에서 이름을 다 보여 줄 개수. 넘으면 개수만 보여 준다.
 BAR = "━" * 60
@@ -77,13 +77,13 @@ def names(items: list[str]) -> str:
 class Progress:
     """모델 호출과 Tool 실행을 감싸서 진행 상황을 한 줄씩 출력한다. 루프 코드는 건드리지 않는다.
 
-    스트리밍으로 글자 조각이 출력 중이면 줄이 끝나지 않은 상태(open)다. 다음 진행 줄은 그 줄을 먼저 끝내고 출력한다.
+    스트리밍으로 글자 조각이 출력 중이면 줄이 끝나지 않은 상태(open)다. 다음 progress message는 그 줄을 먼저 끝내고 출력한다.
     """
 
     def __init__(self):
         self.steps: dict[str, int] = {}  # 에이전트(가지) 이름 → 이번 턴의 스텝 번호. 동시에 도는 가지가 섞이지 않게 따로 센다(C15 Q25).
         self.open = False  # 글자 조각을 출력하다 줄바꿈을 아직 못 한 상태
-        self.indent = ""  # 하위 에이전트의 진행 줄은 들여 쓴다(C12 F5).
+        self.indent = ""  # 하위 에이전트의 call message는 들여 쓴다(C12 F5).
 
     def begin_turn(self):
         self.steps = {}
@@ -126,7 +126,7 @@ class Progress:
         self._say("▸ " + message.replace("\n", "\n" + self.indent + "  "))
 
     def wrap_llm(self, agent: str, llm):
-        """AgentTeam이 에이전트마다 감싼다. 진행 줄에 어느 에이전트가 어느 모델을 부르는지 보인다(C14)."""
+        """AgentTeam이 에이전트마다 감싼다. call message에 어느 에이전트가 어느 모델을 부르는지 보인다(C14)."""
 
         def traced(request, on_text_delta=None):
             step = self.steps[agent] = self.steps.get(agent, 0) + 1
@@ -181,7 +181,7 @@ def main():
                 approve_for=lambda name: lambda call: ask_in_terminal(call, interactive=sys.stdin.isatty(), notice=safety.notice(), agent=name),
                 on_start=progress.delegate_start,
                 on_end=progress.delegate_end,
-                wrap_llm=progress.wrap_llm,  # 진행 줄에 에이전트 이름을 붙인다(C14).
+                wrap_llm=progress.wrap_llm,  # call message에 에이전트 이름을 붙인다(C14).
             )
             print(f"  → {names(list(team.agents))} (맡기기 깊이 상한 {team.max_depth})")
             setup_step(2, "스킬 찾기", f"{SKILLS_DIR.name}/*/SKILL.md")
@@ -225,7 +225,7 @@ def main():
             llm_config=llm_config,
             tools=[progress.wrap_tool(t) for t in registry.tools()],
             max_steps=args.max_steps,
-            llm=call_llm,  # 에이전트마다 AgentTeam이 진행 줄로 감싼다(wrap_llm).
+            llm=call_llm,  # 에이전트마다 AgentTeam이 call message로 감싼다(wrap_llm).
             approve=lambda call: ask_in_terminal(call, interactive=sys.stdin.isatty(), notice=safety.notice()),
             audit=audit,
             tracer=Tracer(TRACE_DIR if env_bool("TRACE_ENABLED", True) else None),

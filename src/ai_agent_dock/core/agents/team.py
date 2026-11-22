@@ -39,9 +39,9 @@ class AgentTeam:
     max_steps: int | None = None  # SUBAGENT_MAX_STEPS. AGENT.md의 max_steps가 우선한다.
     max_result_chars: int = DEFAULT_MAX_RESULT_CHARS  # 하위 에이전트의 답 길이 상한(TOOL_RESULT_MAX_CHARS, Q5)
     approve_for: Callable[[str], Callable[[ToolCall], Approval]] | None = None  # 하위 에이전트 이름 → 승인 함수(메뉴에 [이름], Q7)
-    on_start: Callable[[str, str], None] | None = None  # (에이전트, task). 응용이 진행 줄을 보여 준다(F5).
+    on_start: Callable[[str, str], None] | None = None  # (에이전트, task). 응용이 call message를 보여 준다(F5).
     on_end: Callable[[str, AgentResult], None] | None = None  # (에이전트, 결과). 평가가 하위 에이전트의 Tool 호출을 모은다.
-    wrap_llm: Callable[[str, Callable], Callable] | None = None  # (에이전트, 모델 호출 함수) → 감싼 함수. 응용이 진행 줄에 에이전트 이름을 붙인다.
+    wrap_llm: Callable[[str, Callable], Callable] | None = None  # (에이전트, 모델 호출 함수) → 감싼 함수. 응용이 call message에 에이전트 이름을 붙인다.
 
     def __post_init__(self) -> None:
         if not 1 <= self.max_depth <= MAX_DEPTH:

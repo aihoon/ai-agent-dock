@@ -20,21 +20,12 @@ from ..core.agents import MAIN
 from ..core.orchestration import Workflow, WorkflowContext, ask_agent
 from ..core.retrieval import check_citations
 from ..core.tools import Node, tools_for
-from .common import AgentSlot, branch_config, clean_label, slot_config
+from .common import FALLBACK, MAX_TASKS, ONLY_MINE, WORKERS, branch_config, branch_name, clean_label, slot_config
 
 NAME = "orchestrator-workers"
 ORCHESTRATOR = "orchestrator"
 AGGREGATOR = "aggregator"
-FALLBACK = "general"  # 목록에 없는 worker 이름의 작업을 맡고(Q14), 작업을 못 읽으면 원래 질문에 답한다.
-# 같은 Tool이 두 worker에 겹치지 않게 researcher에서 웹 Tool을 뺐다(Q12).
-WORKERS = [
-    AgentSlot("researcher", "이 프로젝트 문서를 조사한다(필요하면 샌드박스 파일도 읽는다)", agent="researcher", model="", tools=("search_docs", "files__read_*")),
-    AgentSlot("web", "최신 정보, 외부 웹사이트를 조사한다", agent="web", model="", tools=()),
-    AgentSlot("utility", "계산, 지금 시각과 날짜", agent=MAIN, model="openai:gpt-6-luna", tools=("calculate", "get_current_time")),
-]
-MAX_TASKS = 5
 FORMAT = "질문에 맞는 형식으로 합친다. 질문이 보고서를 원하면 제목, 요약(3~5줄), 작업마다 절 하나로 쓴다."
-ONLY_MINE = "원래 질문은 목적을 알려 주려고 넘긴다. 맡은 작업만 하고, 나머지는 다른 worker가 맡는다."  # Q22
 LEADING = re.compile(r"^\s*(?:[-*•]|\d+[.)])?\s*")  # 줄 앞의 목록 기호와 번호
 WORD = re.compile(r"[a-z_]+")
 
@@ -66,11 +57,6 @@ def read_tasks(label: str) -> list[tuple[str, str]]:
         if colon and task and WORD.fullmatch(name):
             tasks.append((name, task))
     return tasks[:MAX_TASKS]
-
-
-def branch_name(task: dict) -> str:
-    """가지 이름: worker-작업 번호(researcher-1, web-2). 추적, 진행 줄, 합치기 프롬프트에 쓴다(Q15)."""
-    return f"{task['worker']}-{task['n']}"
 
 
 def worker_prompt(question: str, task: str) -> str:

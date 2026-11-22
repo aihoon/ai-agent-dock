@@ -62,7 +62,7 @@ def test_failing_gate_stops_before_writing():
     assert len(seen_tools) == 2  # 개요 단계의 호출 두 번뿐, 본문 단계는 부르지 않았다(Q4)
 
 
-def test_swapped_search_docs_keeps_app_progress_line():  # C17 Q27: 노드가 바꾼 search_docs도 응용의 진행 줄을 지난다
+def test_swapped_search_docs_keeps_app_progress_line():  # C17 Q27: 노드가 바꾼 search_docs도 응용의 call message를 지난다
     from dataclasses import replace
 
     ran = []

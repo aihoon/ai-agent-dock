@@ -37,7 +37,7 @@ def slot_config(ctx: WorkflowContext, slot: AgentSlot) -> AgentConfig:
 
 
 def branch_config(ctx: WorkflowContext, config: AgentConfig, name: str, workflow: str) -> AgentConfig:
-    """동시에 도는 가지 하나의 설정. 추적 줄과 응용의 진행 줄에 가지 이름(docs, judge1 등)을 붙인다(C15 Q25).
+    """동시에 도는 가지 하나의 설정. 추적 줄과 응용의 call message에 가지 이름(docs, judge1 등)을 붙인다(C15 Q25).
 
     추적은 턴 번호를 새로 세지 않고 워크플로의 턴 안에 남는다(parent에 워크플로 이름).
     """
@@ -48,7 +48,7 @@ def branch_config(ctx: WorkflowContext, config: AgentConfig, name: str, workflow
 
 def docs_tool(ctx: WorkflowContext, seen: set[str]) -> Tool:
     """검색한 출처를 seen에 모으는 search_docs. 출처 검사를 하는 노드가 main의 search_docs 대신 쓴다.
-    새로 만든 Tool이라 응용의 진행 줄(ctx.wrap_tool)을 여기서 붙인다(C17 Q27)."""
+    새로 만든 Tool이라 응용의 call message(ctx.wrap_tool)을 여기서 붙인다(C17 Q27)."""
     return ctx.wrap_tool(make_search_docs_tool(ctx.knowledge.store, seen))
 
 
@@ -69,3 +69,21 @@ def keep_results(tools: list[Tool], sink: list[tuple[str, str]]) -> list[Tool]:
 def clean_label(label: str) -> str:
     """에이전트가 낸 이름 하나를 정리한다. 대소문자, 앞뒤 공백, 따옴표, 마침표만 정리한다(C14 Q4)."""
     return label.strip(" \t\n\"'`.").lower()
+
+
+# --- worker 목록과 가지 이름. orchestrator-workers(C16)와 plan-and-execute(C18)가 함께 쓴다(C18 Q13, Q27). ---
+
+FALLBACK = "general"  # 목록에 없는 worker 이름의 작업을 맡고(C16 Q14), 작업을 못 읽으면 원래 질문에 답한다.
+# 같은 Tool이 두 worker에 겹치지 않게 researcher에서 웹 Tool을 뺐다(C16 Q12).
+WORKERS = [
+    AgentSlot("researcher", "이 프로젝트 문서를 조사한다(필요하면 샌드박스 파일도 읽는다)", agent="researcher", model="", tools=("search_docs", "files__read_*")),
+    AgentSlot("web", "최신 정보, 외부 웹사이트를 조사한다", agent="web", model="", tools=()),
+    AgentSlot("utility", "계산, 지금 시각과 날짜", agent=MAIN, model="openai:gpt-6-luna", tools=("calculate", "get_current_time")),
+]
+MAX_TASKS = 5
+ONLY_MINE = "원래 질문은 목적을 알려 주려고 넘긴다. 맡은 작업만 하고, 나머지는 다른 worker가 맡는다."  # C16 Q22
+
+
+def branch_name(task: dict) -> str:
+    """가지 이름: worker-작업 번호(researcher-1, web-2). 추적, progress message, 합치기 프롬프트에 쓴다(C16 Q15)."""
+    return f"{task['worker']}-{task['n']}"

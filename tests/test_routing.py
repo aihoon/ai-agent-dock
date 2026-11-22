@@ -51,7 +51,7 @@ class Recorder:
 
 
 def run(question, responses, tools=POOL):
-    """(결과, 가짜 모델, 진행 줄)."""
+    """(결과, 가짜 모델, node message)."""
     llm = Recorder(responses)
     team = AgentTeam(load_agents(AGENTS))
     base = AgentConfig(llm_config=TEST_CONFIG, tools=list(tools), llm=llm)

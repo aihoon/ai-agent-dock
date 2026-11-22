@@ -50,8 +50,9 @@ WHO = {
     "당신은 작업을 나눠": "orchestrator",  # C16
     "당신은 조사 담당": "researcher",
     "당신은 평가자다": "evaluator",  # C17
+    "당신은 질문에 답하기 위한 실행 계획을": "planner",  # C18
 }
-NOT_BRANCHES = ("selector", "aggregator", "orchestrator", "evaluator")  # 나누고 합치는 에이전트는 가지가 아니다.
+NOT_BRANCHES = ("selector", "aggregator", "orchestrator", "evaluator", "planner")  # 나누고 합치는 에이전트는 가지가 아니다.
 
 
 class ByContent:
@@ -82,7 +83,7 @@ class ByContent:
 
 
 def start(name, text, llm, tools=POOL, tracer=None, knowledge=None, max_revisions=4):
-    """(결과, 진행 줄)."""
+    """(결과, node message)."""
     team = AgentTeam(load_agents(AGENTS))
     base = AgentConfig(llm_config=TEST_CONFIG, tools=list(tools), llm=llm, tracer=tracer)
     lines = []
@@ -288,7 +289,7 @@ def test_evaluate_keeps_each_voting_run_for_the_stability_comparison():
 def test_workflows_do_not_import_each_other():  # 표는 따로, 도구만 workflows/common.py에서(Q20). C17에서 모든 워크플로로 넓혔다
     folder = Path(__file__).resolve().parent.parent / "src" / "ai_agent_dock" / "workflows"
     names = sorted(p.stem for p in folder.glob("*.py") if p.stem not in ("__init__", "common"))
-    assert len(names) == 7
+    assert len(names) == 8  # C18 plan_and_execute
     for name in names:
         text = (folder / f"{name}.py").read_text(encoding="utf-8")
         assert [o for o in names if o != name and f"from .{o} import" in text] == [], name
@@ -302,7 +303,7 @@ def test_keep_results_collects_tool_name_and_result():  # C17 Q19
     assert calc.func(q="1") == "ok" and sink == [("calculate", "ok")]
 
 
-def test_branches_show_route_and_ballot_names_to_the_app():  # 진행 줄에 [docs], [judge1]처럼 보인다(Q25)
+def test_branches_show_route_and_ballot_names_to_the_app():  # call message에 [docs], [judge1]처럼 보인다(Q25)
     names = []
     team = AgentTeam(load_agents(AGENTS), wrap_llm=lambda name, llm: lambda request, on_text_delta=None: names.append(name) or llm(request))
     llm = ByContent({"selector": final("docs: 문서 질문\nutility: 계산 질문"), "문서 질문": final("a"), "계산 질문": final("b"), "aggregator": final("ab"), "judge": final("clean")})
