@@ -15,12 +15,9 @@ from langgraph.graph import END, START, StateGraph
 from ..core.evals.rubric import EVALUATOR, FAIL, Verdict, evaluator_prompt, failed, read_verdicts, verdict_line
 from ..core.orchestration import Workflow, WorkflowContext, ask_agent
 from ..core.retrieval import check_citations
-from ..core.agents import MAIN
-from ..core.tools import Node, tools_for
-from .common import docs_tool, keep_results
+from .common import writer_tools
 
 NAME = "evaluator-optimizer"
-WEB_AGENT = "web"
 
 
 class State(TypedDict, total=False):
@@ -61,15 +58,9 @@ def build(ctx: WorkflowContext) -> StateGraph:
     def write(state: State) -> State:
         feedback = state.get("feedback")
         ctx.progress(f"답 다시 작성 (고칠 점: {', '.join(r.split(':')[0] for r in feedback)})" if feedback else "답 작성")
-        seen: set[str] = set()
+        seen: set[str] = set()  # 검색한 출처(코드 출처 검사용)
         evidence: list[tuple[str, str]] = []
-        main = ctx.team.agents[MAIN].tools  # main의 Tool에 web 에이전트의 웹 Tool을 더한다. 질문에 따라 문서, 웹, 파일, 계산을 고른다(Q8-1, Q26).
-        web = ctx.team.agents.get(WEB_AGENT)
-        tools = tools_for(ctx.base.tools, patterns=main, node=Node(web=tuple(web.tools) if web else ()))
-        if ctx.knowledge:  # 검색한 출처를 모으는 search_docs로 바꾼다(코드 출처 검사용).
-            search = docs_tool(ctx, seen)
-            tools = [t for t in tools if t.name != search.name] + [search]
-        draft = ask_agent(replace(ctx.config, tools=keep_results(tools, evidence)), write_prompt(state))  # 부른 Tool의 결과가 근거다.
+        draft = ask_agent(replace(ctx.config, tools=writer_tools(ctx, evidence, seen)), write_prompt(state))  # 부른 Tool의 결과가 근거다.
         return {"draft": draft, "evidence": [{"tool": tool, "result": result} for tool, result in evidence], "seen": sorted(seen)}
 
     def evaluate(state: State) -> State:

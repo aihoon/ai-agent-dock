@@ -48,6 +48,7 @@ class Case:
     expect_verdict: str | None = None  # voting의 판정: injection, clean, unsure(C15)
     llm_judge: bool = False  # True면 규칙 판정과 함께 evaluator의 LLM 판정을 기록한다. 통과/실패에는 넣지 않는다(C17 Q6, Q15)
     expect_workers: list[str] | None = None  # orchestrator-workers가 한 번 이상 써야 할 worker. 순서, 개수, 다른 worker는 보지 않는다(C16 Q17)
+    reflections: list[str] = field(default_factory=list)  # reflexion 케이스가 실행마다 새로 시작하는 교훈(실제 data/reflections.md는 건드리지 않는다, C19 Q19)
 
 
 def load_cases(path: Path) -> list[Case]:

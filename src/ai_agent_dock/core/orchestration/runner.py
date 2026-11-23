@@ -24,6 +24,7 @@ from ..runtime.types import AgentConfig
 
 if TYPE_CHECKING:
     from ..agents import AgentTeam
+    from ..memory import MemoryStore
 
 WAITING = "waiting"  # 사람 승인에서 멈춘 상태. 나머지 상태(approved, rejected, no_evidence)는 워크플로가 정한다.
 SHOW = 200  # 추적 기록에 노드 결과를 이만큼만 남긴다(전체 답은 에이전트의 llm 줄에 있다).
@@ -40,6 +41,7 @@ class WorkflowContext:
     team: AgentTeam | None = None  # 에이전트 정의. 노드마다 다른 에이전트를 쓰는 워크플로(C14 routing)가 쓴다.
     base: AgentConfig | None = None  # 모든 에이전트가 함께 쓰는 설정(설치된 전체 Tool, 승인, Safety, 추적). team.config_for에 넘긴다.
     wrap_tool: Callable[[Tool], Tool] = lambda tool: tool  # 노드가 새로 만든 Tool(search_docs)에 응용의 call message를 붙인다(C17 Q27).
+    reflections: MemoryStore | None = None  # reflexion의 교훈 저장소(data/reflections.md, C19). 평가는 임시 파일을 넘긴다.
 
 
 @dataclass(frozen=True)

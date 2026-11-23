@@ -51,6 +51,7 @@ class CommandContext:
     workflows: WorkflowRunner | None = None  # 워크플로 실행기(C10). None이면 워크플로 명령을 쓸 수 없다.
     waiting: Outcome | None = None  # 사람 승인을 기다리는 워크플로. 응용이 메뉴를 보여 주고 answer_workflow로 답한다.
     agents: AgentTeam | None = None  # 설치된 에이전트(C12). /agents가 보여 준다.
+    reflections: MemoryStore | None = None  # reflexion의 교훈(data/reflections.md, C19). /reflections가 보여 준다.
 
     @property
     def tracer(self):
@@ -307,22 +308,42 @@ def _memory_add(ctx: CommandContext, arg: str) -> str:
     return f"장기 메모리 {n}번에 저장했습니다. 다음 턴부터 반영합니다."
 
 
-def _memory_number(ctx: CommandContext, arg: str) -> int | None:
-    return int(arg) if arg.isdigit() and 1 <= int(arg) <= len(ctx.memory.items()) else None
+def _number(store: MemoryStore | None, arg: str) -> int | None:
+    return int(arg) if store and arg.isdigit() and 1 <= int(arg) <= len(store.items()) else None
 
 
 def _memory_delete_confirm(ctx: CommandContext, arg: str) -> str | None:
-    n = _memory_number(ctx, arg)
+    n = _number(ctx.memory, arg)
     return None if n is None else f"'{ctx.memory.items()[n - 1]}'을 지울까요?"
 
 
 def _memory_delete(ctx: CommandContext, arg: str) -> str:
-    n = _memory_number(ctx, arg)
+    n = _number(ctx.memory, arg)
     if n is None:
         return f"사용법: /memory-delete 번호 (1~{len(ctx.memory.items())})"
     ctx.memory.remove(n)
     ctx.reload_prompt()
     return f"{n}번을 지웠습니다. 다음 턴부터 반영합니다."
+
+
+def _reflections(ctx: CommandContext, arg: str) -> str:
+    items = ctx.reflections.items() if ctx.reflections else []
+    if not items:
+        return "저장된 교훈이 없습니다. /workflow reflexion 질문 으로 실패에서 배운 교훈이 쌓입니다."
+    return "\n".join(f"  {n}. {text}" for n, text in enumerate(items, start=1))
+
+
+def _reflection_delete_confirm(ctx: CommandContext, arg: str) -> str | None:
+    n = _number(ctx.reflections, arg)
+    return None if n is None else f"'{ctx.reflections.items()[n - 1]}'을 지울까요?"
+
+
+def _reflection_delete(ctx: CommandContext, arg: str) -> str:
+    n = _number(ctx.reflections, arg)
+    if n is None:
+        return f"사용법: /reflection-delete 번호 (1~{len(ctx.reflections.items()) if ctx.reflections else 0})"
+    ctx.reflections.remove(n)
+    return f"교훈 {n}번을 지웠습니다. 다음 reflexion 실행부터 반영합니다."
 
 
 STATUS = {"approved": "승인", "rejected": "거부", "no_evidence": "근거 없음", "completed": "완료", "gate_failed": "gate 실패", "passed": "통과", "limit": "상한", "eval_failed": "평가 오류"}
@@ -395,6 +416,8 @@ COMMANDS = [
     Command("/memory", "장기 메모리 보기", _memory),
     Command("/memory-add 내용", "장기 메모리에 더하기", _memory_add),
     Command("/memory-delete 번호", "장기 메모리에서 지우기(확인 후)", _memory_delete, confirm=_memory_delete_confirm),
+    Command("/reflections", "reflexion이 저장한 교훈 보기", _reflections),
+    Command("/reflection-delete 번호", "저장된 교훈 지우기(확인 후)", _reflection_delete, confirm=_reflection_delete_confirm),
     Command("/workflows", "워크플로 목록과 승인 대기 실행 보기", _workflows),
     Command("/workflow 이름 요청", "워크플로 시작(예: /workflow answer-check 질문)", _workflow),
     Command("/workflow-resume 번호", "승인 대기 중인 워크플로 이어 가기", _workflow_resume),

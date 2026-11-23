@@ -45,29 +45,30 @@ class Verdict:
     reason: str
 
 
-def evaluator_prompt(question: str, answer: str, evidence: list[tuple[str, str]] | None) -> str:
+def evaluator_prompt(question: str, answer: str, evidence: list[tuple[str, str]] | None, rubric: list[Criterion] = RUBRIC) -> str:
     """기준표, 질문, 답, 근거. 답과 근거는 외부 내용으로 감싼다(Q10). 근거가 없으면 근거가 필요한 기준은 판정하지 않게 한다.
 
     evidence가 None이면 근거를 이 평가에 넘기지 못한 것(워크플로 케이스), []이면 답을 쓴 쪽이 Tool을 부르지 않은 것이다(Q29).
+    rubric은 reflexion이 팀 규칙을 더해 넘긴다(C19).
     """
-    rubric = "\n".join(f"- {c.name}: {c.rule}" for c in RUBRIC)
+    criteria = "\n".join(f"- {c.name}: {c.rule}" for c in rubric)
     if evidence:
         found = "\n".join(wrap_untrusted(tool, result) for tool, result in evidence)
     else:
-        skipped = ", ".join(c.name for c in RUBRIC if c.needs_evidence)
+        skipped = ", ".join(c.name for c in rubric if c.needs_evidence)
         why = "근거 자료가 이 평가에 전달되지 않았다. 답을 쓴 쪽이 근거를 찾지 못했다고 보지 않는다." if evidence is None else "근거 자료 없음."
         found = f"{why} {skipped}는 판정하지 않음이라고 쓴다."
     return (
-        f"기준표:\n{rubric}\n\n질문: {question}\n\n답:\n{wrap_untrusted('answer', answer)}\n\n"
+        f"기준표:\n{criteria}\n\n질문: {question}\n\n답:\n{wrap_untrusted('answer', answer)}\n\n"
         f"근거(답을 쓴 쪽이 부른 Tool의 결과):\n{found}\n\n"
         '기준마다 한 줄로 "기준: 통과 - 이유" 또는 "기준: 실패 - 이유"만 쓴다.'
     )
 
 
-def read_verdicts(label: str) -> list[Verdict]:
+def read_verdicts(label: str, rubric: list[Criterion] = RUBRIC) -> list[Verdict]:
     """평가자의 답을 기준표 순서의 판정으로. 표에 없는 줄은 버리고, 빠진 기준은 실패로 본다(Q12)."""
     found: dict[str, Verdict] = {}
-    names = {c.name for c in RUBRIC}
+    names = {c.name for c in rubric}
     for line in label.splitlines():
         name, colon, rest = LEADING.sub("", line).partition(":")
         name = name.strip()
@@ -76,7 +77,7 @@ def read_verdicts(label: str) -> list[Verdict]:
         head, _, reason = rest.strip().partition(" - ")
         result = PASS if head.startswith(PASS) else SKIP if head.startswith("판정") else FAIL
         found[name] = Verdict(name, result, reason.strip())
-    return [found.get(c.name, Verdict(c.name, FAIL, MISSING)) for c in RUBRIC]
+    return [found.get(c.name, Verdict(c.name, FAIL, MISSING)) for c in rubric]
 
 
 def failed(verdicts: list[Verdict]) -> list[Verdict]:

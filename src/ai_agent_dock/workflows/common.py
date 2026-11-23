@@ -12,6 +12,7 @@ from ..core.llm import Tool, model_config
 from ..core.orchestration import WorkflowContext
 from ..core.retrieval import make_search_docs_tool
 from ..core.runtime.types import AgentConfig
+from ..core.tools import Node, tools_for
 
 
 @dataclass(frozen=True)
@@ -64,6 +65,20 @@ def keep_results(tools: list[Tool], sink: list[tuple[str, str]]) -> list[Tool]:
         return replace(tool, func=run)
 
     return [keep(t) for t in tools]
+
+
+def writer_tools(ctx: WorkflowContext, evidence: list[tuple[str, str]], seen: set[str]) -> list[Tool]:
+    """답 전체를 쓰는 노드의 Tool. evaluator-optimizer(C17)와 reflexion(C19)이 함께 쓴다.
+
+    main의 Tool에 web 에이전트의 웹 Tool을 더한다(C17 Q8-1, Q26). 문서 색인이 있으면 검색한 출처를 seen에 모으는 search_docs로 바꾼다.
+    부른 Tool의 결과는 evidence에 모인다(평가자의 근거).
+    """
+    web = ctx.team.agents.get("web")
+    tools = tools_for(ctx.base.tools, patterns=ctx.team.agents[MAIN].tools, node=Node(web=tuple(web.tools) if web else ()))
+    if ctx.knowledge:
+        search = docs_tool(ctx, seen)
+        tools = [t for t in tools if t.name != search.name] + [search]
+    return keep_results(tools, evidence)
 
 
 def clean_label(label: str) -> str:

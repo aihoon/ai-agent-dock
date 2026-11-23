@@ -87,6 +87,19 @@ def test_memory_commands_reload_the_prompt_and_remove_asks_first(tmp_path):
     assert "반려견은 콩" not in ctx.session.config.system_prompt
 
 
+def test_reflection_commands_show_and_remove_after_asking(tmp_path):  # C19 Q16
+    ctx = make_ctx(tmp_path)
+    assert run(ctx, "/reflections").startswith("저장된 교훈이 없습니다.")  # 저장소가 없어도
+    ctx.reflections = MemoryStore(tmp_path / "reflections.md")
+    ctx.reflections.add("첫 줄은 결론으로 쓴다")
+    assert run(ctx, "/reflections") == "  1. 첫 줄은 결론으로 쓴다"
+
+    command, arg = find_command("/reflection-delete 1")
+    assert command.confirm(ctx, arg) == "'첫 줄은 결론으로 쓴다'을 지울까요?" and command.confirm(ctx, "2") is None
+    assert run(ctx, "/reflection-delete 2") == "사용법: /reflection-delete 번호 (1~1)"
+    assert run(ctx, "/reflection-delete 1").startswith("교훈 1번을 지웠습니다.") and ctx.reflections.items() == []
+
+
 def test_tokens_and_compact_report_sizes(tmp_path):
     ctx = make_ctx(tmp_path)
     assert "이력 크기" in run(ctx, "/tokens")

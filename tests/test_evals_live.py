@@ -16,6 +16,7 @@ from ai_agent_dock.core.agents import MAIN, AgentTeam, load_agents
 from ai_agent_dock.core.evals import evaluate, last_passed, load_cases, regressions, save_run, scripted_approver, scripted_input, summarize
 from ai_agent_dock.core.llm import LLMRequest, UserMessage, call_llm, config_from_env
 from ai_agent_dock.core.llm.tokens import request_tokens
+from ai_agent_dock.core.memory import MemoryStore
 from ai_agent_dock.core.session.compact import compact
 from ai_agent_dock.core.observability import Tracer, new_session_id
 from ai_agent_dock.core.evals.rubric import EVALUATOR
@@ -47,7 +48,7 @@ def prepare_fixtures():
 pytestmark = pytest.mark.live
 
 
-def test_cases_with_real_model(request):
+def test_cases_with_real_model(request, tmp_path):
     load_dotenv(ROOT / ".env")
     repeat = request.config.getoption("--repeat")
     llm_config = config_from_env(request.config.getoption("--provider"))
@@ -94,7 +95,7 @@ def test_cases_with_real_model(request):
                 tracer=tracer,
             )
             base = with_safety(config, policy=policy)[0]  # 채팅과 같은 Safety(C11 D17)
-            last["base"] = base  # routing 케이스가 경로마다 에이전트를 만들 때 쓴다(C14).
+            last["base"], last["case"] = base, case  # routing 케이스가 경로마다 에이전트를 만들 때(C14), reflexion 케이스가 교훈을 꺼낼 때(C19) 쓴다.
             return team.config_for(MAIN, base, skills=skills, memory=case.memory_items)  # 채팅과 같은 main(C12)
 
         first = make_config(cases[0])
@@ -113,8 +114,11 @@ def test_cases_with_real_model(request):
             return compact(history, keep_turns=env_int("COMPACT_KEEP_TURNS", 4), summarize=summarize_text, count=count)[0]
 
         def workflows(config):  # 워크플로 케이스(C10): 체크포인트는 메모리에 둔다(평가는 재개하지 않는다).
+            reflections = MemoryStore(tmp_path / f"reflections-{new_session_id()}.md")  # 실행마다 케이스의 교훈으로 새로 시작한다(C19 Q19).
+            for text in last["case"].reflections:
+                reflections.add(text)
             context = WorkflowContext(
-                config=config, knowledge=knowledge, max_revisions=env_int("WORKFLOW_MAX_REVISIONS", 4), team=team, base=last["base"]
+                config=config, knowledge=knowledge, max_revisions=env_int("WORKFLOW_MAX_REVISIONS", 4), team=team, base=last["base"], reflections=reflections
             )
             return WorkflowRunner(WORKFLOWS, context, InMemorySaver())
 

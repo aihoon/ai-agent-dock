@@ -4,7 +4,7 @@
 Tool 호출, 스킬, 세션 기반 대화를 갖춘 플랫폼을 만들고, 그 위에 스킬·플러그인을 설치하거나 코드 워크플로를 얹어 **애플리케이션**을 만든다.
 
 ## 현재 단계
-C18 완료(Workflow - Plan-and-Execute: planner 에이전트가 단계 계획을 JSON으로 쓰고, worker가 한 단계씩 차례로 실행하고, 단계마다 planner가 남은 계획을 유지하거나 고치거나 끝내고(replan), aggregator가 합친다). 워크플로 패턴 트랙(C13~C22)의 여섯 번째 단계다. 다음은 C19 Reflexion, C20 Debate, C21 Handoff, C22 패턴 비교와 정리, C23 플랫폼과 프로덕션 하드닝. 태그: `c0`, `c1`, `c1.1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8`, `c9`, `c10`, `c11`, `c12`, `c13`, `c14`, `c14.1`, `c15`, `c16`, `c17`.
+C19 완료(Workflow - Reflexion: main이 답하고(act), evaluator가 기준표로 판정하고(evaluate), 실패하면 reflector가 다음에도 쓸 교훈 한 줄을 쓰고(reflect) main이 교훈만 보고 처음부터 다시 답한다. 반성을 거쳐 통과한 교훈은 `data/reflections.md`에 남아 다음 질문과 다음 세션에서도 쓰인다). 워크플로 패턴 트랙(C13~C22)의 일곱 번째 단계다. 다음은 C20 Debate, C21 Handoff, C22 패턴 비교와 정리, C23 플랫폼과 프로덕션 하드닝. 태그: `c0`, `c1`, `c1.1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8`, `c9`, `c10`, `c11`, `c12`, `c13`, `c14`, `c14.1`, `c15`, `c16`, `c17`, `c18`.
 
 ## 실행
 
@@ -29,6 +29,7 @@ uv run python examples/chat_walkthrough.py --scenario voting            # judge 
 uv run python examples/chat_walkthrough.py --scenario orchestrator-workers  # orchestrator가 작업 3개와 worker → 동시 실행 → aggregator, 걸린 시간(모델 없이)
 uv run python examples/chat_walkthrough.py --scenario evaluator-optimizer   # 답 작성 → evaluator가 기준표로 평가(출처 실패) → 고쳐 쓰기 → 통과, Tool 실행의 입력·출력(모델 없이)
 uv run python examples/chat_walkthrough.py --scenario plan                  # planner JSON 계획 → researcher 실행 → replan 고침 → utility 실행 → replan 끝 → aggregator(모델 없이)
+uv run python examples/chat_walkthrough.py --scenario reflexion             # 질문 1 실패 → reflect 교훈 → 다시 써 통과 → 교훈 저장, 질문 2는 교훈을 받아 첫 시도 통과(모델 없이)
 ```
 
 ### 채팅 명령
@@ -42,6 +43,7 @@ uv run python examples/chat_walkthrough.py --scenario plan                  # pl
 | `/sessions`, `/session 번호` | 저장된 세션 목록을 보고, 번호로 골라 이어 간다. 세션은 턴마다 `data/sessions/`에 자동 저장된다 |
 | `/session-name 새이름`, `/session-new` | 지금 세션 이름 바꾸기(겹치면 거절), 새 세션 시작. 새 세션 이름은 "날짜 첫 질문 앞 20자"로 자동으로 붙는다 |
 | `/memory`, `/memory-add 내용`, `/memory-delete 번호` | 장기 메모리(`data/memory.md`, 번호 목록) 보기, 더하기, 지우기(확인 후). 메모리는 시스템 프롬프트에 들어가 모든 세션이 쓴다 |
+| `/reflections`, `/reflection-delete 번호` | reflexion 워크플로가 저장한 교훈(`data/reflections.md`, 번호 목록) 보기, 지우기(확인 후). 교훈은 reflexion 안에서만 쓰고, 사람이 더하는 명령은 없다(사실은 `/memory-add`) |
 | `/workflows`, `/workflow 이름 요청`, `/workflow-resume 번호` | 워크플로 목록과 승인 대기 실행 보기, 시작, 승인 대기 실행 이어 가기(아래 "워크플로") |
 | `/agents` | 설치된 에이전트(이름, 설명, Tool 패턴)와 main이 맡길 수 있는 에이전트, 맡기기 깊이 상한(아래 "서브에이전트") |
 | `/safety`, `/hooks` | 항상 켜진 Safety 검사와 안전 정책(`safety.json`) 내용, Hook 자리 3개와 설치된 사용자 Hook(아래 "Safety와 Hook") |
@@ -64,6 +66,7 @@ uv run python examples/chat_walkthrough.py --scenario plan                  # pl
 /workflow orchestrator-workers 이 프로젝트 문서로 Agent Loop, 스킬, Tool과 MCP를 각각 정리한 짧은 보고서를 써 줘.
 /workflow evaluator-optimizer 이 프로젝트 문서에서 에이전트 루프의 최대 스텝은 어떻게 정해진다고 설명해?
 /workflow plan-and-execute 이 프로젝트 문서에서 에이전트 루프의 최대 스텝 기본값을 찾고, 그 값의 제곱을 계산해 줘.
+/workflow reflexion 이 프로젝트 문서에서 에이전트 루프의 최대 스텝 기본값은 얼마야?
 ```
 
 - `answer-check`: 답 작성(에이전트, 문서 검색) → 출처 검사(코드) → 실패하면 이유를 붙여 고쳐 쓰기(최대 `WORKFLOW_MAX_REVISIONS`, 기본 4번, C17에서 2에서 올림) → 사람 승인. 상한을 넘으면 "관련 문서에서 근거를 찾지 못했습니다"로 끝난다. 문서 색인이 없으면 시작하지 않는다. 이 워크플로 안에서는 되묻기(`ask_user`)를 쓰지 않는다.
@@ -102,7 +105,13 @@ uv run python examples/chat_walkthrough.py --scenario plan                  # pl
   - 처음 계획을 못 읽으면(JSON이 아님, 모양이 틀림, finished가 true, 호출 오류) general(main)이 답한다. replan을 못 읽으면 끝으로 보고 지금까지로 답한다.
   - node message는 `▸ 워크플로 시작` → `▸ Plan 시작/완료` → `▸ Execute 1/8 시작/완료: researcher-1` → `▸ Replan 시작/완료: 유지·고침·끝` → `▸ Aggregate 시작: aggregator`다. 결과의 고쳐 쓴 횟수는 계획을 고친 횟수다.
   - C16과 비교: 앞 결과가 필요한 질문("값을 찾고 그 제곱")에서 C16은 utility가 researcher의 값을 받지 못해 실패했고, C18은 replan이 utility 단계에 찾은 값을 넣어 calculate로 풀었다. main 단독보다 LLM 호출 약 2.7배, 시간 약 2.5배.
-- 워크플로끼리는 서로 import하지 않는다. 경로 표(`ROUTES`), 메뉴(`MENU`), worker 목록(`WORKERS`, C16과 C18이 함께 씀)은 `workflows/common.py`에, 나머지 표는 각자 파일에 둔다. 공통 도구도 `workflows/common.py`에 있다: 에이전트 자리(`AgentSlot`), 자리로 에이전트 설정 만들기(`slot_config`), 가지 이름 붙이기(`branch_config`), 검색한 출처를 모으는 `search_docs`(`docs_tool`), Tool 결과 모으기(`keep_results`), 이름 정리(`clean_label`).
+- `reflexion`(C19): act(main, C17 작성자와 같은 Tool) → evaluate(C17 evaluator, 기준표는 공통 4개 + 팀 규칙 2개) → 실패하면 reflect(reflector 에이전트 `agents/reflector/AGENT.md`, Tool 없음)가 교훈 한 줄 → act. 논문 Reflexion(Shinn 외 2023)의 Actor, Evaluator, Self-Reflection이다.
+  - 팀 규칙은 "첫 줄은 `결론:`으로 시작", "마지막 줄은 `확인한 곳:` 뒤에 부른 Tool 이름"이다. reflexion의 기준표(`CRITERIA`)에만 있고 작성자는 모른다. 그래서 교훈 없이는 첫 시도가 실패하고, 교훈으로 배운다.
+  - 다시 쓸 때는 이전 답과 고칠 점 대신 `[지난 실패에서 배운 교훈]` 목록과 질문만 받는다(처음부터 새로). C17은 이전 답을 고쳐 쓴다.
+  - 반성을 거쳐 통과하면 그 실행의 교훈을 `data/reflections.md`에 저장한다(최대 20개, 같은 글은 빼고, 넘치면 오래된 것부터). 첫 시도 통과, 상한(작성 5번), 평가 오류면 저장하지 않는다. 시작할 때 저장된 교훈을 읽어 첫 시도부터 넣는다.
+  - reflector 오류나 빈 답이면 실패 이유를 그 시도의 교훈으로 쓰고 저장하지 않는다. node message는 `▸ Act 1/5 시작` → `▸ Evaluate 완료: 통과 4/6 (실패: …)` → `▸ Reflect 완료`(아래에 교훈) → `▸ Act 2/5 시작 (교훈 1개)` → `▸ 교훈 저장: 1개 (모두 1개)`다.
+  - 평가 비교(같은 계산 질문, 3회): 교훈이 있으면 3/3 첫 시도 통과, LLM 호출 3번, 7.7초. 없으면 모두 한 번 반성한 뒤 통과, LLM 호출 7번, 17.5초.
+- 워크플로끼리는 서로 import하지 않는다. 경로 표(`ROUTES`), 메뉴(`MENU`), worker 목록(`WORKERS`, C16과 C18이 함께 씀)은 `workflows/common.py`에, 나머지 표는 각자 파일에 둔다. 공통 도구도 `workflows/common.py`에 있다: 에이전트 자리(`AgentSlot`), 자리로 에이전트 설정 만들기(`slot_config`), 가지 이름 붙이기(`branch_config`), 검색한 출처를 모으는 `search_docs`(`docs_tool`), Tool 결과 모으기(`keep_results`), 작성자 Tool 조립(`writer_tools`, C17과 C19), 이름 정리(`clean_label`).
 - 진행 중에는 `▸ 답 작성`, `▸ 출처 검사: …`, `▸ 고쳐 쓰기 1/4`처럼 노드마다 한 줄씩 보이고, 그 아래 `· [main] 모델 호출 중 (스텝 1, …)`, `· [tool] search_docs`가 보인다. 끝나면 `▸ 워크플로 끝: 상태 (고쳐 쓴 횟수 n)`이다. 동시에 도는 가지의 모델 호출 줄은 섞여 나오고, 가지 이름(`[docs]`, `[web]`, `[judge1]`)과 이름마다 따로 센 스텝 번호가 붙는다.
 - 승인 메뉴는 `1) 승인`, `2) 거부`, `3) 다르게 요청(이유 입력)`이다. 엔터만 치면 승인 대기로 남는다. 승인 대기 상태는 `data/checkpoints.sqlite`에 저장되어 프로그램을 껐다 켜도 `/workflows`에 보이고 `/workflow-resume 번호`로 이어 간다.
 - 승인이나 근거 없음으로 끝나면 질문과 최종 답만 채팅 이력에 한 턴으로 붙는다. 초안과 고쳐 쓴 과정은 체크포인트와 추적 기록에만 남는다. 워크플로는 채팅의 앞선 대화를 보지 않는다.
@@ -162,7 +171,7 @@ uv run python scripts/trace_report.py          # 세션 목록(저장된 세션�
 uv run python scripts/trace_report.py steps    # 가장 최근 세션을 스텝 순서대로: 프롬프트, 모델 출력, Tool 결과, 워크플로 노드. steps 세션번호로 세션을 고른다
 ```
 
-- 평가 케이스는 `evals/cases.jsonl`에 있다(git에 올린다). 카테고리는 tool, docs, approval, clarify, skill, memory, workflow, safety, subagent, routing, sectioning, voting, orchestrator, evaluator, plan-execute다. routing 케이스는 고른 경로(`expect_route`)를, sectioning 케이스는 고른 경로들(`expect_routes`, 순서 무관)을, voting 케이스는 판정(`expect_verdict`)을, orchestrator 케이스는 한 번 이상 쓴 worker(`expect_workers`, 순서와 개수 무관)를 본다. orchestrator 케이스는 같은 질문을 main으로도 돌려 delegate와 비교한다. plan-execute 케이스도 `expect_workers`(researcher, utility)를 보고, 같은 질문을 main으로도 돌린다. voting은 실행마다 `판정 (표 1, 표 2, 표 3)`을 결과 파일의 `verdicts`에 남겨 판정자 1번과 다수결의 흔들림을 비교한다. subagent 케이스는 맡겨야 하는지(`expect_delegate`)를 보고, 하위 에이전트가 부른 Tool도 판정에 센다. 평가는 웹 서버(`web`)를 연결하지 않는다. safety 케이스는 실제로 실행되면 안 되는 Tool(`forbid_executed`)과 평가 전용 문서 색인(`"knowledge": "fixtures"`)을 쓴다. 평가 전용 자료는 `evals/fixtures/`에 있고, 평가할 때 `data/sandbox/eval/`로 복사하고 `data/evals/index.sqlite`로 색인한다. workflow 케이스는 승인 단계의 답(`workflow_decisions`), 마지막 상태(`expect_status`), 고쳐 쓴 횟수 상한(`expect_max_revisions`)을 쓴다. memory 케이스는 앞선 턴(`setup_turns`), 마지막 질문 전 컴팩션(`compact_before`), 평가용 장기 메모리(`memory_items`)를 쓴다.
+- 평가 케이스는 `evals/cases.jsonl`에 있다(git에 올린다). 카테고리는 tool, docs, approval, clarify, skill, memory, workflow, safety, subagent, routing, sectioning, voting, orchestrator, evaluator, plan-execute, reflexion이다. routing 케이스는 고른 경로(`expect_route`)를, sectioning 케이스는 고른 경로들(`expect_routes`, 순서 무관)을, voting 케이스는 판정(`expect_verdict`)을, orchestrator 케이스는 한 번 이상 쓴 worker(`expect_workers`, 순서와 개수 무관)를 본다. orchestrator 케이스는 같은 질문을 main으로도 돌려 delegate와 비교한다. plan-execute 케이스도 `expect_workers`(researcher, utility)를 보고, 같은 질문을 main으로도 돌린다. voting은 실행마다 `판정 (표 1, 표 2, 표 3)`을 결과 파일의 `verdicts`에 남겨 판정자 1번과 다수결의 흔들림을 비교한다. subagent 케이스는 맡겨야 하는지(`expect_delegate`)를 보고, 하위 에이전트가 부른 Tool도 판정에 센다. 평가는 웹 서버(`web`)를 연결하지 않는다. safety 케이스는 실제로 실행되면 안 되는 Tool(`forbid_executed`)과 평가 전용 문서 색인(`"knowledge": "fixtures"`)을 쓴다. 평가 전용 자료는 `evals/fixtures/`에 있고, 평가할 때 `data/sandbox/eval/`로 복사하고 `data/evals/index.sqlite`로 색인한다. workflow 케이스는 승인 단계의 답(`workflow_decisions`), 마지막 상태(`expect_status`), 고쳐 쓴 횟수 상한(`expect_max_revisions`)을 쓴다. memory 케이스는 앞선 턴(`setup_turns`), 마지막 질문 전 컴팩션(`compact_before`), 평가용 장기 메모리(`memory_items`)를 쓴다. reflexion 케이스는 실행마다 임시 파일에 새로 넣는 교훈(`reflections`)을 쓰고, 실제 `data/reflections.md`는 건드리지 않는다. 첫 시도 통과는 `expect_max_revisions: 0`으로 본다.
 - 판정은 규칙 기반이다. 기대한 Tool 호출, 금지 Tool, 답에 있어야 할 표현, 있으면 안 되는 표현, 출처 표기, 실행한 Tool의 오류를 본다. 목표는 100% 통과다. 워크플로 케이스는 최종 답과 상태만 보고, 가지 안의 Tool 호출과 오류는 아직 판정하지 않는다(C16에서 발견).
 - `"llm_judge": true`인 케이스(16개)는 evaluator-optimizer와 같은 평가자와 기준표로 실행마다 LLM 판정도 한다(C17). 결과 파일의 `llm_verdicts`에 `통과 3/4 (실패: 출처 - 이유)`처럼 남고, 요약 끝에 `LLM 판정: N케이스, 규칙 판정과 어긋남 M번 (id들)`이 나온다. 기록만 하고 통과/실패에는 넣지 않는다. 워크플로 케이스는 근거(Tool 결과)를 넘길 수 없어 근거에 맞음과 출처는 판정하지 않는다.
 - 결과는 `data/evals/실행번호.json`에 저장되고, 직전 실행에서 통과했는데 이번에 실패한 케이스를 회귀로 표시한다.
@@ -224,6 +233,7 @@ Python 3.12, 패키지 관리는 [uv](https://docs.astral.sh/uv/)를 쓴다.
 - **Evaluator-optimizer**: 한 에이전트가 답을 쓰고 다른 에이전트(evaluator)가 기준표(**rubric**)로 평가해 피드백을 주면, 통과하거나 상한에 닿을 때까지 고쳐 쓰는 워크플로(C17). 평가자가 코드인 answer-check와 달리 평가자가 LLM이다
 - **LLM 판정(LLM-as-judge)**: 답의 품질을 LLM이 기준표로 판정하는 것. 평가에서는 규칙 판정과 나란히 기록만 한다(C17)
 - **Plan-and-Execute**: planner가 단계 계획을 먼저 쓰고 worker가 한 단계씩 차례로 실행하며, 단계마다 남은 계획을 유지하거나 고치거나 끝내는(**replan**) 워크플로(C18). 한 번 나누고 동시에 도는 orchestrator-workers와 달리 앞 단계 결과를 보고 다음을 정한다
+- **Reflexion**: 실패하면 반성문(**reflection**, 다음 시도에 쓸 교훈 한 줄)을 쓰고 그것을 메모리에 두고 다시 시도해, 가중치를 바꾸지 않고 말로 배우는 워크플로(C19). 이번 답을 고치는 evaluator-optimizer와 달리 교훈이 다음 질문과 세션에 남는다
 - **progress message**: 실행 중 터미널에 찍히는 메시지. workflow 노드의 시작·완료인 **node message**(`▸ Plan 시작`), 모델 호출·Tool 실행·맡기기인 **call message**(`· [planner] 모델 호출 중`), 그래프가 끝난 뒤 결과를 요약한 **outcome message**(`▸ 워크플로 끝: …`)가 있다. 파일에 남는 자세한 기록은 trace다(C18)
 - **툴 루프 에이전트(Tool loop agent)**: 모델이 Tool을 요청하고 결과를 받아 다시 답하는 과정을 반복하는 에이전트(ReAct 방식). 지금 `run_agent`가 이것이다.
 - 그 밖의 용어는 Notion의 Terminology 페이지에 정리한다.
@@ -233,9 +243,9 @@ Python 3.12, 패키지 관리는 [uv](https://docs.astral.sh/uv/)를 쓴다.
 - `src/ai_agent_dock/core/llm/`: 제공자 독립 LLM 호출(`call_llm`, 스트리밍은 `on_text_delta`)과 OpenAI·Anthropic 어댑터
 - `src/ai_agent_dock/core/runtime/`: Agent Loop(`run_agent`), 설정·결과 타입(`AgentConfig`, `AgentResult`). 시스템 프롬프트 조립은 `core/agents/system_prompt.py`
 - `src/ai_agent_dock/core/agents/`: 서브에이전트. `AGENT.md` 읽기와 Tool 패턴(`loader.py`), 시스템 프롬프트 조립(`system_prompt.py`), 에이전트 설정 만들기와 `delegate` Tool(`team.py`의 `AgentTeam.config_for`)
-- `agents/`: 에이전트 정의(`main`, `researcher`, routing 경로용 `router`, `web`, `chat`, C15의 `selector`, `aggregator`, `judge`, C16의 `orchestrator`, C17의 `evaluator`, C18의 `planner`의 `AGENT.md`)
+- `agents/`: 에이전트 정의(`main`, `researcher`, routing 경로용 `router`, `web`, `chat`, C15의 `selector`, `aggregator`, `judge`, C16의 `orchestrator`, C17의 `evaluator`, C18의 `planner`, C19의 `reflector`의 `AGENT.md`)
 - `src/ai_agent_dock/core/hitl/`: 사람 개입. 승인 메뉴(`approval.py`), 되묻기 Tool(`clarify.py`), 감사 로그(`audit.py`)
-- `src/ai_agent_dock/core/evals/`: 평가. 케이스 읽기와 규칙 판정(`score.py`), 실행과 결과 저장, 회귀 표시, LLM 판정 기록(`run.py`), 기준표와 평가자 프롬프트, 평가자 답 읽기(`rubric.py`, evaluator-optimizer도 쓴다)
+- `src/ai_agent_dock/core/evals/`: 평가. 케이스 읽기와 규칙 판정(`score.py`), 실행과 결과 저장, 회귀 표시, LLM 판정 기록(`run.py`), 기준표와 평가자 프롬프트, 평가자 답 읽기(`rubric.py`, evaluator-optimizer와 reflexion도 쓴다. 기준표는 인자로 바꿀 수 있다)
 - `src/ai_agent_dock/core/observability/`: 관측. 세션별 추적 기록(`trace.py`)과 추적 리포트 계산(`report.py`)
 - `src/ai_agent_dock/core/llm/tokens.py`: 토큰 수 채우기(제공자 값이 없으면 tiktoken으로 계산하고 출처 태그를 붙인다)
 - `src/ai_agent_dock/core/safety/`: Safety. 안전 정책(`policy.py`), 감싸기와 지시문 탐지, 키 가리기(`checks.py`), 가리기 패턴(`mask.py`). runtime은 이 폴더를 import하지 않고 Safety의 모양(`SafetyChecks`)만 안다
@@ -243,9 +253,9 @@ Python 3.12, 패키지 관리는 [uv](https://docs.astral.sh/uv/)를 쓴다.
 - `hooks/`, `hooks.example.json`, `safety.example.json`: 사용자 Hook 스크립트와 설정 예시(복사해서 `hooks.json`, `safety.json`으로 쓴다)
 - `evals/`: 평가 케이스(`cases.jsonl`)와 평가 전용 자료(`fixtures/`)
 - `src/ai_agent_dock/core/session/`: 대화 세션(턴 사이에 이력을 이어 간다), 세션 저장(`store.py`, `data/sessions/`), 컴팩션(`compact.py`)
-- `src/ai_agent_dock/core/memory/`: 장기 메모리(`data/memory.md`)
+- `src/ai_agent_dock/core/memory/`: 장기 메모리(`data/memory.md`). 같은 `MemoryStore`를 reflexion 교훈(`data/reflections.md`)에도 쓴다
 - `src/ai_agent_dock/core/orchestration/`: 워크플로 실행 기반(`WorkflowRunner`: 시작, 재개, 승인 대기 찾기, 추적 기록). 체크포인트 저장 방식은 밖에서 받는다(채팅은 SQLite, 테스트와 평가는 메모리)
-- `src/ai_agent_dock/workflows/`: 워크플로 정의(`answer_check.py`, `prompt_chaining.py`, `routing.py`, `sectioning.py`, `voting.py`, `orchestrator_workers.py`, `evaluator_optimizer.py`, `plan_and_execute.py`)와 공통 도구(`common.py`). 애플리케이션이 자기 그래프를 정의하는 방식의 첫 예. core는 이 폴더를 import하지 않고, 워크플로끼리도 서로 import하지 않는다
+- `src/ai_agent_dock/workflows/`: 워크플로 정의(`answer_check.py`, `prompt_chaining.py`, `routing.py`, `sectioning.py`, `voting.py`, `orchestrator_workers.py`, `evaluator_optimizer.py`, `plan_and_execute.py`, `reflexion.py`)와 공통 도구(`common.py`). 애플리케이션이 자기 그래프를 정의하는 방식의 첫 예. core는 이 폴더를 import하지 않고, 워크플로끼리도 서로 import하지 않는다
 - `src/ai_agent_dock/core/commands.py`: 슬래시 명령(이름, 사용법, 처리). 응용은 입력을 넘기고 결과를 보여 주기만 한다
 - `src/ai_agent_dock/core/skills/`: 스킬 로더. `skills/` 폴더의 `SKILL.md`를 읽고 머리말을 검사하며, 목록 문장과 `load_skill` Tool을 만든다
 - `src/ai_agent_dock/core/tools/`: 기본 제공 Tool(계산기, 현재 시각)과 `ToolRegistry`(이름 중복 방지, 인자 검증, 결과 길이 제한)

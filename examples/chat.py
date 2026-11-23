@@ -47,6 +47,7 @@ APP_COMMANDS = [("/help", "명령 목록 보기"), ("/exit", "종료")]  # 응�
 HELP = help_text(APP_COMMANDS)
 SESSIONS_DIR = Path(__file__).resolve().parent.parent / "data" / "sessions"  # 세션 저장(이어 하기용). data/는 git에서 제외한다.
 MEMORY_PATH = Path(__file__).resolve().parent.parent / "data" / "memory.md"  # 장기 메모리. data/는 git에서 제외한다.
+REFLECTIONS_PATH = Path(__file__).resolve().parent.parent / "data" / "reflections.md"  # reflexion이 저장한 교훈(C19). data/는 git에서 제외한다.
 CHECKPOINT_PATH = Path(__file__).resolve().parent.parent / "data" / "checkpoints.sqlite"  # 워크플로 체크포인트(C10 D4). data/는 git에서 제외한다.
 SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"  # 프로젝트 루트의 skills/
 KNOWLEDGE_DIR = Path(__file__).resolve().parent.parent / "knowledge"  # 프로젝트 루트의 knowledge/(검색할 문서)
@@ -216,6 +217,7 @@ def main():
             raise SystemExit(f"설정 오류: {e}")
         audit = AuditLog(AUDIT_PATH)
         memory = MemoryStore(MEMORY_PATH)
+        reflections = MemoryStore(REFLECTIONS_PATH)
 
         def make_prompt() -> str:  # 메모리가 바뀌면 다시 조립한다(다음 턴부터 반영, C9 D20).
             return team.config_for(MAIN, config, skills=skills, memory=memory.items()).system_prompt
@@ -281,8 +283,9 @@ def main():
             keep_turns=env_int("COMPACT_KEEP_TURNS", 4),
             compact_warn_tokens=env_int("COMPACT_WARN_TOKENS", 100_000),
             memory_warn_tokens=env_int("MEMORY_WARN_TOKENS", 2_000),
-            workflows=make_workflows(stack, session.config, knowledge, progress, team=team, base=config),
+            workflows=make_workflows(stack, session.config, knowledge, progress, team=team, base=config, reflections=reflections),
             agents=team,
+            reflections=reflections,
         )
         repl(session, ctx, progress, stream, safety)
 
@@ -307,7 +310,9 @@ def build_registry(args, stack: ExitStack, *, skills: list[SkillMeta], knowledge
     return registry
 
 
-def make_workflows(stack: ExitStack, config: AgentConfig, knowledge: Knowledge | None, progress, *, team: AgentTeam, base: AgentConfig) -> WorkflowRunner:
+def make_workflows(
+    stack: ExitStack, config: AgentConfig, knowledge: Knowledge | None, progress, *, team: AgentTeam, base: AgentConfig, reflections: MemoryStore
+) -> WorkflowRunner:
     """워크플로 실행기. 체크포인트는 data/checkpoints.sqlite에 저장한다(서비스에서는 C12에서 Postgres로 바꾼다).
 
     config는 main 설정, base는 모든 에이전트가 함께 쓰는 설정이다. routing은 team과 base로 경로마다 에이전트를 만든다(C14).
@@ -317,7 +322,8 @@ def make_workflows(stack: ExitStack, config: AgentConfig, knowledge: Knowledge |
     stack.callback(conn.close)
     max_revisions = env_int("WORKFLOW_MAX_REVISIONS", 4)
     context = WorkflowContext(
-        config=config, knowledge=knowledge, max_revisions=max_revisions, progress=progress.workflow_step, team=team, base=base, wrap_tool=progress.wrap_tool
+        config=config, knowledge=knowledge, max_revisions=max_revisions, progress=progress.workflow_step, team=team, base=base,
+        wrap_tool=progress.wrap_tool, reflections=reflections,
     )
     return WorkflowRunner(WORKFLOWS, context, SqliteSaver(conn))
 

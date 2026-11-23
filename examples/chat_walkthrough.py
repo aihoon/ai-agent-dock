@@ -21,6 +21,7 @@
   uv run python examples/chat_walkthrough.py --scenario orchestrator-workers  # 모델 없이: orchestrator가 작업 3개와 worker → 동시 실행 → aggregator(C16)
   uv run python examples/chat_walkthrough.py --scenario evaluator-optimizer   # 모델 없이: 답 작성 → evaluator가 기준표로 평가(출처 실패) → 고쳐 쓰기 → 통과(C17)
   uv run python examples/chat_walkthrough.py --scenario plan     # 모델 없이: planner가 계획 → researcher 실행 → 다시 계획(고침) → utility 실행 → 끝 → aggregator(C18)
+  uv run python examples/chat_walkthrough.py --scenario reflexion   # 모델 없이: 팀 규칙에 실패 → reflector가 교훈 → 다시 써 통과 → 저장 → 다른 질문은 첫 시도 통과(C19)
   uv run python examples/chat_walkthrough.py --stream "17*23은 얼마야?"    # 실제 모델로 스트리밍
   uv run python examples/chat_walkthrough.py "17*23은 얼마야?" "거기에 2를 곱해 줘"   # 실제 모델로 여러 턴
   uv run python examples/chat_walkthrough.py --provider anthropic "안녕" "내가 방금 뭐라고 했지?"
@@ -47,6 +48,7 @@ from walkthrough import Tracer, ask, banner, clip, describe, scripted  # C1 워�
 from ai_agent_dock.core.agents import MAIN, AgentTeam, build_agent_index, load_agents
 from ai_agent_dock.core.hitl import Approval, ask_in_terminal
 from ai_agent_dock.core.llm import LLMConfig, LLMResponse, Tool, ToolCall, call_llm, config_from_env
+from ai_agent_dock.core.memory import MemoryStore
 from ai_agent_dock.core.observability import Tracer as TraceFile
 from ai_agent_dock.core.orchestration import WorkflowContext, WorkflowRunner
 from ai_agent_dock.core.retrieval import HashingEmbedder, Hit, Knowledge, KnowledgeIndex, make_search_docs_tool
@@ -234,7 +236,7 @@ def hitl_write_tool(tracer):
 def main():
     parser = argparse.ArgumentParser(description="여러 턴 대화의 단계별 출력 데모")
     parser.add_argument("questions", nargs="*", help="실제 모델에 차례로 보낼 질문들(생략하면 기본 두 질문)")
-    parser.add_argument("--scenario", choices=[*SCENARIOS, "workflow", "safety", "subagent", "chain", "routing", "sectioning", "voting", "orchestrator-workers", "evaluator-optimizer", "plan"], help="모델 없이 시나리오 실행")
+    parser.add_argument("--scenario", choices=[*SCENARIOS, "workflow", "safety", "subagent", "chain", "routing", "sectioning", "voting", "orchestrator-workers", "evaluator-optimizer", "plan", "reflexion"], help="모델 없이 시나리오 실행")
     parser.add_argument("--provider", help="LLM 제공자(openai, anthropic). 생략하면 .env의 LLM_PROVIDER")
     parser.add_argument("--max-steps", type=int, help="한 턴에서 모델을 호출하는 횟수 상한")
     parser.add_argument("--stream", action="store_true", help="스트리밍으로 받아 글자 조각이 도착하는 모습을 보여 준다")
@@ -256,6 +258,8 @@ def main():
         return walk_parallel(args.scenario)
     if args.scenario == "plan":
         return walk_parallel("plan-and-execute")
+    if args.scenario == "reflexion":
+        return walk_reflexion()
 
     if args.scenario:
         questions, model, scenario_steps = SCENARIOS[args.scenario]
@@ -651,6 +655,42 @@ def walk_parallel(name):
         print(f"  ▸ 상태: {outcome.status} (계획 고침 {outcome.revisions}번, 실행한 worker: {', '.join(outcome.workers or [])})\n\n  답:\n{outcome.answer}")
         return
     print(f"  ▸ 걸린 시간 {time.perf_counter() - started:.1f}초 (가지의 모델 호출은 1초씩. 차례로 돌았다면 그 합만큼 걸린다)\n  답:\n{outcome.answer}")
+
+
+def walk_reflexion():
+    """reflexion(C19)을 가짜 모델로 돌린다. 질문 1은 팀 규칙에 실패 → 반성 → 다시 써 통과 → 교훈 저장.
+    질문 2(다른 질문)는 저장된 교훈을 받아 첫 시도에 통과한다. 교훈은 임시 파일에 저장한다(data/reflections.md는 건드리지 않는다)."""
+    common = "질문에 답함: 통과\n근거에 맞음: 판정하지 않음\n출처: 판정하지 않음\n간결: 통과"
+    lesson = "답의 첫 줄은 '결론:'으로 시작하고, 마지막 줄에 '확인한 곳:'과 부른 Tool 이름을 쓴다"
+    responses = scripted(
+        final("최대 스텝 기본값은 10입니다."),  # 질문 1, Act 1: 팀 규칙을 모른다
+        final(common + "\n결론 먼저: 실패 - 첫 줄이 '결론:'으로 시작하지 않는다\n확인한 곳: 실패 - 마지막 줄에 '확인한 곳:'이 없다"),
+        final(lesson),  # reflector
+        final("결론: 최대 스텝 기본값은 10입니다.\n환경 변수 AGENT_MAX_STEPS로 바꿉니다.\n확인한 곳: 없음"),  # 질문 1, Act 2: 교훈을 지킨다
+        final(common + "\n결론 먼저: 통과\n확인한 곳: 통과"),
+        ask("c1", "calculate", expression="2**10+3"),  # 질문 2, Act 1: 저장된 교훈을 받았다
+        final("결론: 1027입니다.\n2의 10제곱 1024에 3을 더했습니다.\n확인한 곳: calculate"),
+        final(common + "\n결론 먼저: 통과\n확인한 곳: 통과"),
+    )
+
+    def llm(request, on_text_delta=None):
+        print(f"    · 모델 호출: {(request.system_prompt or '').splitlines()[0]}")
+        return responses(request)
+
+    team = AgentTeam(load_agents(Path(__file__).resolve().parent.parent / "agents"))
+    base = AgentConfig(llm_config=LLMConfig(provider="scenario", model="scenario", max_output_tokens=None), tools=BUILTIN_TOOLS, llm=llm)
+    with tempfile.TemporaryDirectory() as tmp:
+        reflections = MemoryStore(Path(tmp) / "reflections.md")
+        context = WorkflowContext(
+            config=team.config_for(MAIN, base), team=team, base=base, reflections=reflections,
+            progress=lambda message: print("  ▸ " + message.replace("\n", "\n    ")),
+        )
+        runner = WorkflowRunner(WORKFLOWS, context, InMemorySaver())
+        for question in ["이 프로젝트 문서에서 에이전트 루프의 최대 스텝 기본값은?", "2의 10제곱에 3을 더하면?"]:
+            banner(f"/workflow reflexion {question}")
+            outcome = runner.start("reflexion", question)
+            print(f"  ▸ 워크플로 끝: {outcome.status} (고쳐 쓴 횟수 {outcome.revisions})\n\n  답:\n{outcome.answer}")
+            print("\n/reflections\n" + "\n".join(f"  {n}. {text}" for n, text in enumerate(reflections.items(), start=1)))
 
 
 def walk_workflow():
