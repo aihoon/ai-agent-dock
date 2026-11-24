@@ -346,7 +346,7 @@ def _reflection_delete(ctx: CommandContext, arg: str) -> str:
     return f"교훈 {n}번을 지웠습니다. 다음 reflexion 실행부터 반영합니다."
 
 
-STATUS = {"approved": "승인", "rejected": "거부", "no_evidence": "근거 없음", "completed": "완료", "gate_failed": "gate 실패", "passed": "통과", "limit": "상한", "eval_failed": "평가 오류"}
+STATUS = {"approved": "승인", "rejected": "거부", "no_evidence": "근거 없음", "completed": "완료", "gate_failed": "gate 실패", "passed": "통과", "limit": "상한", "eval_failed": "평가 오류", "agreed": "합의", "decided": "정리", "failed": "실패"}
 
 
 def _report(ctx: CommandContext, outcome: Outcome) -> str:

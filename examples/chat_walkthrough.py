@@ -22,6 +22,7 @@
   uv run python examples/chat_walkthrough.py --scenario evaluator-optimizer   # 모델 없이: 답 작성 → evaluator가 기준표로 평가(출처 실패) → 고쳐 쓰기 → 통과(C17)
   uv run python examples/chat_walkthrough.py --scenario plan     # 모델 없이: planner가 계획 → researcher 실행 → 다시 계획(고침) → utility 실행 → 끝 → aggregator(C18)
   uv run python examples/chat_walkthrough.py --scenario reflexion   # 모델 없이: 팀 규칙에 실패 → reflector가 교훈 → 다시 써 통과 → 저장 → 다른 질문은 첫 시도 통과(C19)
+  uv run python examples/chat_walkthrough.py --scenario debate      # 모델 없이: 토론자 3명 첫 답이 갈림 → 서로의 답을 보고 고침 → 모두 같음, 최종 답에서 [다른 답 검토] 절을 뺌(C20)
   uv run python examples/chat_walkthrough.py --stream "17*23은 얼마야?"    # 실제 모델로 스트리밍
   uv run python examples/chat_walkthrough.py "17*23은 얼마야?" "거기에 2를 곱해 줘"   # 실제 모델로 여러 턴
   uv run python examples/chat_walkthrough.py --provider anthropic "안녕" "내가 방금 뭐라고 했지?"
@@ -236,7 +237,7 @@ def hitl_write_tool(tracer):
 def main():
     parser = argparse.ArgumentParser(description="여러 턴 대화의 단계별 출력 데모")
     parser.add_argument("questions", nargs="*", help="실제 모델에 차례로 보낼 질문들(생략하면 기본 두 질문)")
-    parser.add_argument("--scenario", choices=[*SCENARIOS, "workflow", "safety", "subagent", "chain", "routing", "sectioning", "voting", "orchestrator-workers", "evaluator-optimizer", "plan", "reflexion"], help="모델 없이 시나리오 실행")
+    parser.add_argument("--scenario", choices=[*SCENARIOS, "workflow", "safety", "subagent", "chain", "routing", "sectioning", "voting", "orchestrator-workers", "evaluator-optimizer", "plan", "reflexion", "debate"], help="모델 없이 시나리오 실행")
     parser.add_argument("--provider", help="LLM 제공자(openai, anthropic). 생략하면 .env의 LLM_PROVIDER")
     parser.add_argument("--max-steps", type=int, help="한 턴에서 모델을 호출하는 횟수 상한")
     parser.add_argument("--stream", action="store_true", help="스트리밍으로 받아 글자 조각이 도착하는 모습을 보여 준다")
@@ -260,6 +261,8 @@ def main():
         return walk_parallel("plan-and-execute")
     if args.scenario == "reflexion":
         return walk_reflexion()
+    if args.scenario == "debate":
+        return walk_debate()
 
     if args.scenario:
         questions, model, scenario_steps = SCENARIOS[args.scenario]
@@ -691,6 +694,34 @@ def walk_reflexion():
             outcome = runner.start("reflexion", question)
             print(f"  ▸ 워크플로 끝: {outcome.status} (고쳐 쓴 횟수 {outcome.revisions})\n\n  답:\n{outcome.answer}")
             print("\n/reflections\n" + "\n".join(f"  {n}. {text}" for n, text in enumerate(reflections.items(), start=1)))
+
+
+def walk_debate():
+    """debate(C20)를 가짜 모델로 돌린다. 첫 라운드에서 결론이 갈리고(아니요 | 예 | 아니요), 서로의 답을 본 뒤 모두 같아져 끝난다.
+    세 토론자는 동시에 돌아 호출 순서가 매번 달라서, 응답은 차례가 아니라 토론자 이름(debater-1~3)으로 고른다."""
+    scripts = {
+        "debater-1": ["결론: 아니요\n스킬은 이름과 설명만 보이고 본문은 load_skill로 불러온다. MCP Tool은 Tool 목록에 그대로 보인다."] * 2,
+        "debater-2": [
+            "결론: 예\n둘 다 모델이 이름과 설명을 보고 고른다.",
+            "결론: 아니요\n스킬 본문은 필요할 때만 불러오고, MCP Tool은 처음부터 Tool로 보인다.\n\n[다른 답 검토]\n처음 답은 고른다는 점만 봤다. debater-1 말이 맞다.",
+        ],
+        "debater-3": ["결론: 아니요\n스킬은 지침 파일이고, MCP Tool은 실행되는 함수다."] * 2,
+    }
+
+    def wrap(name, _llm):
+        def call(request, on_text_delta=None):
+            print(f"    · [{name}] 모델 호출: {request.messages[0].content.splitlines()[0][:50]}")
+            return final(scripts[name].pop(0))
+
+        return call
+
+    team = AgentTeam(load_agents(Path(__file__).resolve().parent.parent / "agents"), wrap_llm=wrap)
+    base = AgentConfig(llm_config=LLMConfig(provider="scenario", model="scenario", max_output_tokens=None), tools=BUILTIN_TOOLS, llm=lambda r, on_text_delta=None: None)
+    context = WorkflowContext(config=team.config_for(MAIN, base), team=team, base=base, progress=lambda message: print("  ▸ " + message))
+    question = "이 프로젝트 문서로 보면 스킬과 MCP Tool은 모델에게 같은 방식으로 보여?"
+    banner(f"/workflow debate {question}")
+    outcome = WorkflowRunner(WORKFLOWS, context, InMemorySaver()).start("debate", question)
+    print(f"  ▸ 워크플로 끝: {outcome.status} (고쳐 쓴 횟수 {outcome.revisions})\n\n  답:\n{outcome.answer}")
 
 
 def walk_workflow():

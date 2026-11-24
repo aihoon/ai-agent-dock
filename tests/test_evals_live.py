@@ -53,6 +53,10 @@ def test_cases_with_real_model(request, tmp_path):
     repeat = request.config.getoption("--repeat")
     llm_config = config_from_env(request.config.getoption("--provider"))
     cases = load_cases(ROOT / "evals" / "cases.jsonl")
+    category = request.config.getoption("--category")
+    if category:  # 한 카테고리만 먼저 돌린다(C20 Q20). 회귀는 돌린 케이스만 본다.
+        cases = [c for c in cases if c.category == category]
+        assert cases, f"카테고리 {category}의 케이스가 없다"
     skills = scan_skills(ROOT / "skills")
     knowledge = open_knowledge(ROOT / "data" / "index.sqlite")
     fixture_knowledge = prepare_fixtures()

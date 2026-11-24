@@ -11,6 +11,7 @@ def pytest_addoption(parser):
     parser.addoption("--live", action="store_true", default=False, help="실제 모델로 평가 케이스를 실행한다(비용과 네트워크가 든다).")
     parser.addoption("--provider", default=None, help="평가에 쓸 제공자(기본: .env의 LLM_PROVIDER).")
     parser.addoption("--repeat", type=int, default=1, help="평가 케이스마다 반복할 횟수(기본 1). 통과율은 반복 중 통과 비율이다.")
+    parser.addoption("--category", default=None, help="이 카테고리의 케이스만 실행한다(예: debate). 결과 파일에도 그 케이스만 남는다(C20 Q20).")
 
 
 def pytest_configure(config):

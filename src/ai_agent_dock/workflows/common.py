@@ -67,14 +67,15 @@ def keep_results(tools: list[Tool], sink: list[tuple[str, str]]) -> list[Tool]:
     return [keep(t) for t in tools]
 
 
-def writer_tools(ctx: WorkflowContext, evidence: list[tuple[str, str]], seen: set[str]) -> list[Tool]:
-    """답 전체를 쓰는 노드의 Tool. evaluator-optimizer(C17)와 reflexion(C19)이 함께 쓴다.
+def writer_tools(ctx: WorkflowContext, evidence: list[tuple[str, str]], seen: set[str], *, branch: bool = False) -> list[Tool]:
+    """답 전체를 쓰는 노드의 Tool. evaluator-optimizer(C17), reflexion(C19), debate(C20)가 함께 쓴다.
 
     main의 Tool에 web 에이전트의 웹 Tool을 더한다(C17 Q8-1, Q26). 문서 색인이 있으면 검색한 출처를 seen에 모으는 search_docs로 바꾼다.
-    부른 Tool의 결과는 evidence에 모인다(평가자의 근거).
+    부른 Tool의 결과는 evidence에 모인다(평가자의 근거). branch면 동시에 도는 가지라 승인이 필요 없는 Tool만 준다(C20 Q26).
     """
     web = ctx.team.agents.get("web")
-    tools = tools_for(ctx.base.tools, patterns=ctx.team.agents[MAIN].tools, node=Node(web=tuple(web.tools) if web else ()))
+    node = Node(branch=branch, web=tuple(web.tools) if web else ())
+    tools = tools_for(ctx.base.tools, patterns=ctx.team.agents[MAIN].tools, node=node)
     if ctx.knowledge:
         search = docs_tool(ctx, seen)
         tools = [t for t in tools if t.name != search.name] + [search]
