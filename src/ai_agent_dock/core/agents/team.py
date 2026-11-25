@@ -21,7 +21,7 @@ from ..observability import Tracer
 from ..runtime.loop import run_agent
 from ..runtime.types import AgentResult, AgentConfig
 from ..skills import SkillMeta
-from ..tools import DEFAULT_MAX_RESULT_CHARS, DELEGATE, ToolRegistry, matches, tools_for
+from ..tools import DEFAULT_MAX_RESULT_CHARS, DELEGATE, HANDOFF, ToolRegistry, matches, tools_for
 from ..tools.assemble import GLOB
 from .loader import MAIN
 from .system_prompt import build_system_prompt
@@ -72,6 +72,12 @@ class AgentTeam:
         blocked = {MAIN, name, *parents}  # 자기 자신과 부모 줄을 부르면 순환한다.
         return [a for a in self.agents.values() if a.name not in blocked and a.delegate]
 
+    def handoff_targets(self, name: str) -> list[AgentSpec]:
+        """name이 대화를 넘길 수 있는 에이전트(별 모양, C21 Q3). main은 handoff: true인 에이전트들, 그 에이전트들은 main만."""
+        if name == MAIN:
+            return [a for a in self.agents.values() if a.handoff and a.name != MAIN]
+        return [self.agents[MAIN]] if self.agents[name].handoff else []
+
     def config_for(
         self,
         name: str,
@@ -83,22 +89,31 @@ class AgentTeam:
         parents: tuple[str, ...] = (),
         tracer: Tracer | None = None,
         only: Iterable[str] | None = None,
+        handoff: bool = False,
     ) -> AgentConfig:
         """에이전트 하나의 설정. base는 모든 에이전트가 함께 쓰는 설정(모델, 설치된 전체 Tool, 승인, Safety, Hook, 감사 로그, 추적)이다.
 
         main은 depth=0으로 부르고 skills와 memory를 넘긴다. 하위 에이전트는 delegate가 depth와 parents, tracer를 넘긴다.
         only를 주면 AGENT.md의 Tool 중 only에도 맞는 것만 준다(교집합). delegate도 only에 맞아야 붙는다.
+        handoff면 세션의 대화 에이전트라 넘기기 Tool을 붙인다(C21). 워크플로와 하위 에이전트는 받지 않는다.
         """
         agent = self.agents[name]
         if depth == 0:
             tracer = base.tracer
         only = list(only) if only is not None else None
         tools = tools_for(base.tools, patterns=agent.tools, depth=depth, only=only)  # Tool은 core/tools에서 정한다(C17 Q22).
+        handoffs = self.handoff_targets(name) if handoff and depth == 0 else []
+        if name == MAIN and handoffs:  # 넘길 에이전트가 맡는 쓰기 Tool은 빼서, 쓰기는 넘겨야만 하게 한다(C21 Q22). 워크플로의 main은 그대로.
+            tools = [t for t in tools if t.read_only or not any(matches(a.tools, t.name) for a in handoffs)]
         targets = self.targets(name, depth, parents) if only is None or matches(only, DELEGATE) else []
         if targets:
             tools.append(self._delegate_tool(base, depth, (*parents, name), targets, tracer))
+        if handoffs:
+            tools.append(handoff_tool(handoffs))
         # 하위 에이전트는 load_skill이 없어 스킬 목록이 빠진다. 메모리는 여기서 뺀다(Q4).
-        prompt = build_system_prompt(agent.body, tools, skills=skills, memory=memory if depth == 0 else None, targets=targets)
+        prompt = build_system_prompt(
+            agent.body, tools, skills=skills, memory=memory if depth == 0 else None, targets=targets, handoffs=handoffs, returning=name != MAIN
+        )
         if depth == 0:  # main: 실행 인자(--max-steps) > AGENT.md > AGENT_MAX_STEPS
             max_steps, approve = base.max_steps or agent.max_steps, base.approve
         else:  # 하위 에이전트: AGENT.md > SUBAGENT_MAX_STEPS
@@ -149,3 +164,33 @@ class AgentTeam:
         registry = ToolRegistry(max_result_chars=self.max_result_chars)  # 인자 검사(enum)와 답 길이 제한을 다른 Tool과 같게 한다.
         registry.add(tool, source="agents")
         return registry.tools()[0]
+
+
+def handoff_tool(targets: list[AgentSpec]) -> Tool:
+    """넘기기 Tool(C21 Q9). 실행하면 지금 에이전트의 루프가 멈추고(ends_turn), 세션이 agent로 바꿔 같은 이력으로 이어 돈다.
+
+    넘길 곳을 정하는 것은 세션이 이 Tool 호출의 인자를 읽어서 한다. Tool 자체는 받았다는 사실만 돌려준다.
+    """
+    names = [a.name for a in targets]
+
+    def handoff(agent: str, reason: str) -> str:
+        if agent not in names:  # 오류면 루프가 멈추지 않고 지금 에이전트가 계속한다(4.2절).
+            raise ValueError(f"넘길 수 없는 에이전트다: {agent} (넘길 수 있는 에이전트: {', '.join(names)})")
+        return f"{agent}에게 넘겼다."
+
+    return Tool(
+        name=HANDOFF,
+        description="대화를 다른 에이전트에게 넘긴다. 넘겨받은 에이전트가 이 대화를 이어받아 사용자에게 직접 답한다. 이 Tool을 부를 때는 답을 함께 쓰지 않는다.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "agent": {"type": "string", "enum": names, "description": "넘길 에이전트 이름"},
+                "reason": {"type": "string", "description": "넘기는 이유 한 줄(화면과 기록에 남는다)"},
+            },
+            "required": ["agent", "reason"],
+        },
+        func=handoff,
+        read_only=True,  # 대화만 넘긴다. 넘겨받은 에이전트의 Tool이 각자 승인을 거친다.
+        trusted=True,
+        ends_turn=True,
+    )

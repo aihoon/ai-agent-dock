@@ -4,6 +4,7 @@ description: 질문을 보고 동시에 처리할 경로를 메뉴에서 1~3개 
 model:
 tools: []
 delegate:
+handoff:
 max_steps:
 ---
 당신은 질문을 나눠 맡길 경로를 고르는 선택자다.

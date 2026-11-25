@@ -1,7 +1,7 @@
 """에이전트 정의 읽기: agents/<이름>/AGENT.md를 찾고, 머리말을 검사하고, 에이전트 목록 문장을 만든다.
 
-형식은 스킬(SKILL.md)과 같다. 머리말: name, description, model, tools, delegate, max_steps. 본문: 역할 지침.
-여섯 항목을 모두 적고, 쓰지 않는 값은 비워 둔다(C14). 빈 model은 대화 모델, 빈 delegate는 false, 빈 max_steps는 기본값이다.
+형식은 스킬(SKILL.md)과 같다. 머리말: name, description, model, tools, delegate, handoff, max_steps. 본문: 역할 지침.
+일곱 항목을 모두 적고, 쓰지 않는 값은 비워 둔다(C14, C21). 빈 model은 대화 모델, 빈 delegate와 handoff는 false, 빈 max_steps는 기본값이다.
 tools는 비울 수 없다. [a, b] 또는 a, b로 쓴다. "*"는 모든 Tool, "!web__*"처럼 !로 시작하면 제외다. []는 Tool 없음이다.
 """
 
@@ -34,6 +34,26 @@ def load_agents(root: Path) -> dict[str, AgentSpec]:
     if MAIN not in agents:
         raise AgentFormatError(f"메인 에이전트 정의가 없다: {root / MAIN / AGENT_FILE}")
     return agents
+
+
+HANDOFF_INDEX_HEAD = (
+    "대화를 넘길 수 있는 에이전트 목록이다. 사용자가 이 에이전트의 일을 여러 턴 이어서 하려 하면 "
+    "handoff(agent, reason)로 넘긴다. 넘기면 그 에이전트가 이 대화를 이어받아 사용자에게 직접 답하므로, handoff를 부를 때는 답을 함께 쓰지 않는다. "
+    "한 번 답하면 끝나는 일은 넘기지 않는다. 넘길 일이면 먼저 되묻지 말고 바로 넘긴다. 무엇을 어떻게 할지는 넘겨받은 에이전트가 묻는다."
+)
+RETURN_RULE = (
+    "당신은 main에게서 이 대화를 넘겨받았다. 사용자가 일이 끝났다고 하거나 맡은 일과 상관없는 것을 물을 때만 "
+    "handoff(main, reason)로 main에게 돌려준다. 자기 답을 마친 뒤 스스로 돌려주지 않는다. handoff를 부를 때는 답을 함께 쓰지 않는다."
+)
+
+
+def build_handoff_index(agents: list[AgentSpec], *, returning: bool) -> str:
+    """넘기기 안내 문장(C21 Q9). main은 넘길 수 있는 에이전트 목록, 넘겨받은 에이전트는 돌려주는 규칙."""
+    if returning:
+        return RETURN_RULE
+    if not agents:
+        return ""
+    return "\n".join([HANDOFF_INDEX_HEAD, *(f"- {a.name}: {a.description}" for a in agents)])
 
 
 def build_agent_index(agents: list[AgentSpec]) -> str:
@@ -71,6 +91,9 @@ def _read(path: Path, folder_name: str) -> AgentSpec:
     delegate = fields.get("delegate", "").lower()  # 비우거나 없으면 false: 맡길 수 있는 에이전트만 true로 적는다.
     if delegate not in ("true", "false", ""):
         raise AgentFormatError(f"{path}: delegate는 true, false 또는 빈 값이어야 한다: {delegate!r}")
+    handoff = fields.get("handoff", "").lower()  # 비우거나 없으면 false: main이 대화를 넘길 수 있는 에이전트만 true(C21 Q8).
+    if handoff not in ("true", "false", ""):
+        raise AgentFormatError(f"{path}: handoff는 true, false 또는 빈 값이어야 한다: {handoff!r}")
     if not body.strip():
         raise AgentFormatError(f"{path}: 본문(역할 지침)이 비어 있다")
     return AgentSpec(
@@ -82,4 +105,5 @@ def _read(path: Path, folder_name: str) -> AgentSpec:
         max_steps=int(max_steps) if max_steps else None,
         model=model,
         delegate=delegate == "true",
+        handoff=handoff == "true",
     )

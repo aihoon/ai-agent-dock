@@ -117,6 +117,12 @@ class Progress:
     def say(self, message: str):
         self._say(message)
 
+    def handoff(self, source: str, target: str, reason: str):
+        """대화를 넘길 때와 돌아올 때(C21 Q13). 넘겨받은 에이전트의 스텝은 1부터 새로 센다."""
+        arrow = f"⇠ {target}으로 돌아옴" if target == MAIN else f"⇢ {target}에게 넘김"
+        self._say(f"{arrow}: {reason}")
+        self.steps.pop(target, None)
+
     def blocked(self, name: str, reason: str):
         """정책이 Tool을 막았을 때(C11 D15). 승인 메뉴 없이 한 줄만 보여 준다."""
         self._say(f"  ⛔ 안전 정책으로 막았습니다: {name} ({reason})")
@@ -270,7 +276,13 @@ def main():
                 print(f"  {spec.event}" + (f"(Tool {spec.match})" if spec.event != "after_answer" else "") + f": {' '.join(spec.command)}")
         print(f"  → 설치: {len(config.hooks.specs)}개" if hooks_path else "  → 없음")
         print(BAR)
-        session = Session(team.config_for(MAIN, config, skills=skills, memory=memory.items()))
+        def agent_config(name: str) -> AgentConfig:  # 대화 에이전트의 설정: 넘기기 Tool과 장기 메모리를 받는다(C21 Q10).
+            return team.config_for(name, config, skills=skills, memory=memory.items(), handoff=True)
+
+        def main_config() -> AgentConfig:  # 워크플로가 쓰는 main 설정. 넘기기 Tool은 없다(C21 Q14).
+            return team.config_for(MAIN, config, skills=skills, memory=memory.items())
+
+        session = Session(agent_config(MAIN), agents=agent_config, on_handoff=progress.handoff)
         ctx = CommandContext(
             session=session,
             registry=registry,
@@ -283,9 +295,10 @@ def main():
             keep_turns=env_int("COMPACT_KEEP_TURNS", 4),
             compact_warn_tokens=env_int("COMPACT_WARN_TOKENS", 100_000),
             memory_warn_tokens=env_int("MEMORY_WARN_TOKENS", 2_000),
-            workflows=make_workflows(stack, session.config, knowledge, progress, team=team, base=config, reflections=reflections),
+            workflows=make_workflows(stack, main_config(), knowledge, progress, team=team, base=config, reflections=reflections),
             agents=team,
             reflections=reflections,
+            main_config=main_config,
         )
         repl(session, ctx, progress, stream, safety)
 
@@ -372,7 +385,7 @@ def repl(session: Session, ctx: CommandContext, progress: Progress, stream: bool
     print(f"대화를 시작합니다({'스트리밍' if stream else '일괄 응답'}). 명령을 보려면 /help 를 입력하세요.")
     while True:
         try:
-            line = input("> ").strip()
+            line = input("> " if session.agent == MAIN else f"[{session.agent}] > ").strip()  # 지금 대화 상대(C21 Q13)
         except (EOFError, KeyboardInterrupt):
             print()
             break

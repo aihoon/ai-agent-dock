@@ -4,6 +4,7 @@ description: 프로젝트 문서와 파일을 찾아 출처와 함께 조사 결
 model: openai:gpt-6-luna
 tools: [search_docs, files__read_*, web__tavily_search, web__tavily_extract]
 delegate: true
+handoff:
 max_steps: 6
 ---
 당신은 조사 담당 에이전트다. 

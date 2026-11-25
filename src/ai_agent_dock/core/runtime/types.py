@@ -34,7 +34,7 @@ class AgentResult:
     """run_agent의 결과."""
 
     answer: str | None
-    status: str  # "completed"(최종 답변으로 종료) 또는 "max_steps"(최대 스텝 도달로 종료)
+    status: str  # "completed"(최종 답변으로 종료), "max_steps"(최대 스텝 도달로 종료), "handoff"(넘기기 Tool을 실행하고 멈춤, C21)
     steps: int  # 모델을 호출한 횟수
     history: list[Message]
     usage: Usage = field(default_factory=Usage)  # 이번 턴의 토큰 합계(/tokens가 쓴다)

@@ -4,6 +4,7 @@ description: 평가에서 실패한 답을 보고, 다음 시도에 쓸 교훈�
 model:
 tools: []
 delegate:
+handoff:
 max_steps:
 ---
 당신은 실패한 답을 보고 다음 시도에 쓸 교훈을 쓰는 반성 담당이다.

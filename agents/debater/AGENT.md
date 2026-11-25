@@ -4,6 +4,7 @@ description: debate 워크플로의 토론자. 직접 찾아 답하고, 다른 �
 model:
 tools: ["*", "!web__*"]
 delegate:
+handoff:
 max_steps: 6
 ---
 당신은 토론에 참여한 토론자다.

@@ -4,6 +4,7 @@ description: 웹 검색으로 최신 정보와 외부 사이트 내용을 찾아
 model: openai:gpt-6-luna
 tools: [web__tavily_search, web__tavily_extract, get_current_time]
 delegate:
+handoff: true
 max_steps:
 ---
 당신은 웹 검색을 맡은 어시스턴트다.

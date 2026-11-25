@@ -17,6 +17,7 @@ from ai_agent_dock.core.evals import evaluate, last_passed, load_cases, regressi
 from ai_agent_dock.core.llm import LLMRequest, UserMessage, call_llm, config_from_env
 from ai_agent_dock.core.llm.tokens import request_tokens
 from ai_agent_dock.core.memory import MemoryStore
+from ai_agent_dock.core.session import Session
 from ai_agent_dock.core.session.compact import compact
 from ai_agent_dock.core.observability import Tracer, new_session_id
 from ai_agent_dock.core.evals.rubric import EVALUATOR
@@ -126,11 +127,17 @@ def test_cases_with_real_model(request, tmp_path):
             )
             return WorkflowRunner(WORKFLOWS, context, InMemorySaver())
 
+        def session(config):  # 채팅과 같은 대화 세션: main이 넘기면 넘겨받은 에이전트가 이어 답한다(C21 Q20).
+            def agent_config(name):
+                return team.config_for(name, last["base"], skills=skills, memory=last["case"].memory_items, handoff=True)
+
+            return Session(agent_config(MAIN), agents=agent_config)
+
         def judge(prompt):  # llm_judge 케이스의 LLM 판정(C17). 기록만 하고 통과/실패에는 넣지 않는다.
             return ask_agent(team.config_for(EVALUATOR, last["base"]), prompt)
 
         results = [
-            evaluate(case, make_config, repeat, compactor=compactor, workflows=workflows, delegated=take_delegated, judge=judge)
+            evaluate(case, make_config, repeat, compactor=compactor, workflows=workflows, delegated=take_delegated, judge=judge, session=session)
             for case in cases
         ]
 

@@ -4,6 +4,7 @@ description: 기준표로 답을 평가하고, 기준마다 통과나 실패와 
 model:
 tools: []
 delegate:
+handoff:
 max_steps:
 ---
 당신은 평가자다.

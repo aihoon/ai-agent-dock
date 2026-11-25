@@ -4,6 +4,7 @@ description: 여러 경로나 worker의 답을 받아 출처를 살린 한 답�
 model:
 tools: []
 delegate:
+handoff:
 max_steps:
 ---
 당신은 여러 자료를 합쳐 답하는 어시스턴트다.

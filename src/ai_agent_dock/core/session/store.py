@@ -25,6 +25,7 @@ class SessionRecord:
     created: str = field(default_factory=lambda: datetime.now().isoformat(timespec="seconds"))
     updated: str = ""
     history: list[Message] = field(default_factory=list)
+    agent: str = "main"  # 지금 대화 중인 에이전트(C21 Q12). 없는 옛 파일은 main
 
     @property
     def turns(self) -> int:
@@ -83,6 +84,7 @@ class SessionStore:
             "created": record.created,
             "updated": record.updated,
             "history": [message_to_dict(m) for m in record.history],
+            "agent": record.agent,
         }
         tmp = self._path(record.id).with_suffix(".tmp")
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -99,6 +101,7 @@ class SessionStore:
             created=data["created"],
             updated=data["updated"],
             history=[message_from_dict(d, keep_raw) for d in data["history"]],
+            agent=data.get("agent", "main"),
         )
 
     def list(self) -> list[SessionRecord]:

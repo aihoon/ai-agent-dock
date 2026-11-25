@@ -12,7 +12,6 @@ from typing import Any
 
 from ..llm import ToolCall
 
-PREVIEW_CHARS = 60  # 승인 메뉴에 보여 줄 인자 미리보기 글자 수
 
 
 @dataclass(frozen=True)
@@ -67,5 +66,4 @@ def ask_in_terminal(
 
 
 def _preview(arguments: dict[str, Any]) -> str:
-    text = json.dumps(arguments, ensure_ascii=False)
-    return text if len(text) <= PREVIEW_CHARS else text[:PREVIEW_CHARS] + "…"
+    return json.dumps(arguments, ensure_ascii=False)  # 자르지 않는다. 어느 파일에 무엇을 쓰는지 다 보고 승인한다(C21 T7).

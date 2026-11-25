@@ -18,6 +18,7 @@ class AgentSpec:
     max_steps: int | None = None  # 없으면 main은 AGENT_MAX_STEPS, 하위 에이전트는 SUBAGENT_MAX_STEPS
     model: str | None = None  # "제공자:모델"(C14 Q3). 없으면 대화 모델
     delegate: bool = False  # True여야 다른 에이전트가 맡길 수 있다(C14 Q2-2). 비우면 False
+    handoff: bool = False  # True여야 main이 대화를 넘길 수 있다(C21 Q8). 비우면 False
 
 
 class AgentFormatError(ValueError):

@@ -4,7 +4,7 @@
 MCP 클라이언트는 SDK를 가져오는 비용이 있어 여기서 import하지 않는다. 필요한 곳에서 `from ai_agent_dock.core.tools.mcp import ...`로 쓴다.
 """
 
-from .assemble import DELEGATE, NO_ASKING, PARENT_ONLY, Node, build_pool, connect_mcp, make_builtin_tools, matches, select_tools, tools_for
+from .assemble import DELEGATE, HANDOFF, NO_ASKING, PARENT_ONLY, Node, build_pool, connect_mcp, make_builtin_tools, matches, select_tools, tools_for
 from .builtin import BUILTIN_TOOLS, calculate, get_current_time
 from .errors import ToolArgumentError, ToolError
 from .registry import DEFAULT_MAX_RESULT_CHARS, ToolRegistry
@@ -13,6 +13,7 @@ __all__ = [
     "BUILTIN_TOOLS",
     "DEFAULT_MAX_RESULT_CHARS",
     "DELEGATE",
+    "HANDOFF",
     "NO_ASKING",
     "PARENT_ONLY",
     "Node",

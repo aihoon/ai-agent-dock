@@ -4,6 +4,7 @@ description: Tool 없이 인사, 일반 지식, 글 다듬기 같은 가벼운 �
 model: openai:gpt-6-luna
 tools: []
 delegate:
+handoff:
 max_steps:
 ---
 당신은 가벼운 대화를 맡은 어시스턴트다.

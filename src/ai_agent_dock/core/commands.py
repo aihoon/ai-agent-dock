@@ -21,7 +21,7 @@ from .memory import MemoryStore
 from .observability import new_session_id
 from .orchestration import WAITING, Outcome, WorkflowRunner
 from .retrieval import Knowledge
-from .runtime.types import Usage
+from .runtime.types import AgentConfig, Usage
 from .safety import ALWAYS_ON
 from .session import Session
 from .session.compact import compact
@@ -52,6 +52,7 @@ class CommandContext:
     waiting: Outcome | None = None  # 사람 승인을 기다리는 워크플로. 응용이 메뉴를 보여 주고 answer_workflow로 답한다.
     agents: AgentTeam | None = None  # 설치된 에이전트(C12). /agents가 보여 준다.
     reflections: MemoryStore | None = None  # reflexion의 교훈(data/reflections.md, C19). /reflections가 보여 준다.
+    main_config: Callable[[], AgentConfig] | None = None  # 워크플로가 쓰는 main 설정(넘기기 Tool 없음, C21 Q14). None이면 지금 설정
 
     @property
     def tracer(self):
@@ -66,6 +67,7 @@ class CommandContext:
     def save(self) -> None:
         if self.record is not None:
             self.record.history = self.session.history
+            self.record.agent = self.session.agent
             self.store.save(self.record)
 
     def after_turn(self, question: str) -> str | None:
@@ -76,19 +78,28 @@ class CommandContext:
             return "※ 이력이 기준보다 큽니다. /compact로 줄일 수 있습니다."
         return None
 
-    def start_fresh(self, history: list[Message]) -> None:
+    def start_fresh(self, history: list[Message], agent: str = MAIN) -> None:
         self.session.history = history
+        if self.session.agents is not None and self.session.agent != agent:  # 세션 파일의 대화 에이전트로(C21 Q12)
+            self.session.switch(agent if agent in self.session_agents() else MAIN)
         self.session.last_usage, self.session.total_usage = Usage(), Usage()
         self.session.trace_started = False  # 바꾼 세션의 추적 파일에도 다음 턴 전에 세션 설정을 쓴다(C9 D27).
         if self.knowledge:
             self.knowledge.seen.clear()
 
+    def session_agents(self) -> list[str]:
+        """대화 에이전트가 될 수 있는 이름: main과 넘길 수 있는 에이전트."""
+        return [MAIN, *(a.name for a in self.agents.handoff_targets(MAIN))] if self.agents else [MAIN]
+
     def reload_prompt(self) -> None:
-        self.session.config = replace(self.session.config, system_prompt=self.make_prompt())
+        if self.session.agents is not None:  # 지금 에이전트의 설정을 메모리째 다시 만든다(C21).
+            self.session.refresh()
+        else:
+            self.session.config = replace(self.session.config, system_prompt=self.make_prompt())
 
     def runner(self) -> WorkflowRunner:
         """워크플로 실행기. 노드 안 에이전트가 지금 설정(메모리를 반영한 시스템 프롬프트)을 쓰게 맞춘다."""
-        self.workflows.context.config = self.session.config
+        self.workflows.context.config = self.main_config() if self.main_config else self.session.config  # 늘 main(C21 Q14)
         self.session.record_start()  # 워크플로가 이 세션의 첫 동작이어도 추적 파일에 세션 설정을 먼저 쓴다.
         return self.workflows
 
@@ -154,9 +165,30 @@ def _agents(ctx: CommandContext, arg: str) -> str:
     lines = [f"에이전트 {len(team.agents)}개 (맡기기 깊이 상한 {team.max_depth}, SUBAGENT_MAX_DEPTH):"]
     for agent in team.agents.values():
         targets = ", ".join(a.name for a in team.targets(agent.name)) if agent.name == MAIN else ""
-        lines.append(f"  {agent.name}: {agent.description}")
-        lines.append(f"      tools: {', '.join(agent.tools)}" + (f"  → 맡길 수 있음: {targets}" if targets else ""))
+        handoffs = ", ".join(a.name for a in team.handoff_targets(agent.name)) if agent.name == MAIN else ""
+        now = "  ← 지금 대화 중" if agent.name == ctx.session.agent else ""
+        lines.append(f"  {agent.name}: {agent.description}{now}")
+        lines.append(
+            f"      tools: {', '.join(agent.tools)}"
+            + (f"  → 맡길 수 있음: {targets}" if targets else "")
+            + (f"  → 넘길 수 있음: {handoffs}" if handoffs else "")
+        )
     return "\n".join(lines)
+
+
+def _agent(ctx: CommandContext, arg: str) -> str:
+    """지금 대화하는 에이전트를 보거나 바꾼다(C21 Q6). 모델을 부르지 않고 이력은 그대로 둔다."""
+    session = ctx.session
+    if session.agents is None or ctx.agents is None:
+        return "이 채팅은 에이전트를 바꿀 수 없습니다."
+    choices = ctx.session_agents()
+    if not arg:
+        return f"지금 대화 중인 에이전트: {session.agent} (바꿀 수 있음: {', '.join(choices)})"
+    if arg not in choices:
+        return f"바꿀 수 없는 에이전트입니다: {arg} (바꿀 수 있음: {', '.join(choices)})"
+    session.switch(arg)
+    ctx.save()
+    return f"이제 {arg}와 대화합니다."
 
 
 def _hooks(ctx: CommandContext, arg: str) -> str:
@@ -259,7 +291,7 @@ def _session(ctx: CommandContext, arg: str) -> str:
         return f"사용법: /session 번호 (1~{len(records)}, 목록은 /sessions)"
     ctx.save()  # 바꾸기 전 세션을 저장해 둔다.
     ctx.record = ctx.store.load(records[int(arg) - 1].id, ctx.session.config.llm_config.provider)
-    ctx.start_fresh(ctx.record.history)
+    ctx.start_fresh(ctx.record.history, ctx.record.agent)
     if ctx.tracer:
         ctx.tracer.session_id, ctx.tracer.turn = ctx.record.id, ctx.record.turns  # 같은 파일에서 턴 번호가 겹치지 않게 이어 센다
         ctx.tracer.record("session_resume", None, name=ctx.record.name)
@@ -404,6 +436,7 @@ COMMANDS = [
     Command("/tools", "사용 중인 Tool 보기", _tools),
     Command("/skills", "스킬 목록 보기", _skills),
     Command("/agents", "에이전트 목록 보기", _agents),
+    Command("/agent 이름", "지금 대화하는 에이전트 보기, 바꾸기(이름을 빼면 보기)", _agent),
     Command("/hooks", "설치한 Hook 보기", _hooks),
     Command("/safety", "항상 켜진 Safety 검사와 안전 정책 보기", _safety),
     Command("/skill 이름", "스킬 지침을 대화에 넣기", _skill),

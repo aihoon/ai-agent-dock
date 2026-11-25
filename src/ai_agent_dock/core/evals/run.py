@@ -13,8 +13,8 @@ from pathlib import Path
 from ..hitl import Approval
 from ..llm import Message, ToolCall
 from ..orchestration import WAITING, Outcome, WorkflowRunner
-from ..runtime.loop import run_agent
 from ..runtime.types import AgentResult, AgentConfig
+from ..session import Session
 from .rubric import FAIL, evaluator_prompt, read_verdicts, tool_evidence, verdict_line
 from .score import Case, called_tools, check, check_workflow
 
@@ -64,6 +64,7 @@ def evaluate(
     workflows: Callable[[AgentConfig], WorkflowRunner] | None = None,
     delegated: Callable[[], list[AgentResult]] | None = None,
     judge: Callable[[str], str] | None = None,
+    session: Callable[[AgentConfig], Session] | None = None,
 ) -> CaseResult:
     """케이스를 repeat번 실행한다. 실행마다 설정을 새로 만든다(미리 적은 답이 실행마다 처음부터 쓰이도록).
 
@@ -72,6 +73,8 @@ def evaluate(
     workflow가 있으면 질문을 워크플로로 실행하고, 승인 단계에는 workflow_decisions를 차례로 답한다(C10 D22).
     delegated는 그동안 맡긴 하위 에이전트의 결과를 꺼내고 비우는 함수다(C12). 마지막 질문의 것만 판정에 쓴다.
     judge는 evaluator에게 평가자 프롬프트를 주고 답을 받는 함수다(C17). llm_judge 케이스에서 실행마다 부르고 기록만 한다.
+    session은 main 설정으로 채팅과 같은 세션을 만드는 함수다(C21 Q20). 넘기기가 있으면 앞선 턴의 대화 에이전트가 마지막 질문으로 이어진다.
+    판정의 Tool은 마지막 턴에서 돈 모든 에이전트의 호출을 센다. expect_agent는 마지막 턴이 끝났을 때 대화 중인 에이전트다.
     """
     take = delegated or (lambda: [])
     outcome = CaseResult(id=case.id, category=case.category, runs=repeat, passes=0)
@@ -89,16 +92,20 @@ def evaluate(
             else:
                 outcome.passes += 1
             continue
-        history: list[Message] = []
+        chat = (session or Session)(config)
+        chat.trace_started = True  # 평가는 실행 처음에 세션 설정을 한 번만 기록한다.
         for question in case.setup_turns:
-            history = run_agent(config, question, history=history).history
+            chat.ask(question)
         if case.compact_before and compactor is not None:
-            history = compactor(history)
+            chat.history = compactor(chat.history)
         take()  # 앞선 턴에서 맡긴 것은 버린다.
-        full = run_agent(config, case.question, history=history)
-        result = replace(full, history=full.history[len(history):])
+        before = len(chat.history)
+        full = chat.ask(case.question)
+        result = replace(full, history=full.history[before:])
         children = take()
         failures = check(case, result, children)
+        if case.expect_agent and chat.agent != case.expect_agent:
+            failures.append(f"대화 에이전트: 기대 {case.expect_agent}, 실제 {chat.agent}")
         outcome.tools = called_tools(result) + [name for c in children for name in called_tools(c)]
         outcome.answer = result.answer
         if case.llm_judge and judge:

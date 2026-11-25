@@ -4,6 +4,7 @@ description: 질문을 보고 하위 작업을 2~5개로 나누고, 작업마다
 model:
 tools: []
 delegate:
+handoff:
 max_steps:
 ---
 당신은 작업을 나눠 worker에게 맡기는 오케스트레이터다.

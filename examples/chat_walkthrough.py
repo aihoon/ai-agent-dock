@@ -23,6 +23,7 @@
   uv run python examples/chat_walkthrough.py --scenario plan     # 모델 없이: planner가 계획 → researcher 실행 → 다시 계획(고침) → utility 실행 → 끝 → aggregator(C18)
   uv run python examples/chat_walkthrough.py --scenario reflexion   # 모델 없이: 팀 규칙에 실패 → reflector가 교훈 → 다시 써 통과 → 저장 → 다른 질문은 첫 시도 통과(C19)
   uv run python examples/chat_walkthrough.py --scenario debate      # 모델 없이: 토론자 3명 첫 답이 갈림 → 서로의 답을 보고 고침 → 모두 같음, 최종 답에서 [다른 답 검토] 절을 뺌(C20)
+  uv run python examples/chat_walkthrough.py --scenario handoff     # 모델 없이: main이 files에게 넘김 → files가 두 턴 답함 → main으로 돌아옴(C21)
   uv run python examples/chat_walkthrough.py --stream "17*23은 얼마야?"    # 실제 모델로 스트리밍
   uv run python examples/chat_walkthrough.py "17*23은 얼마야?" "거기에 2를 곱해 줘"   # 실제 모델로 여러 턴
   uv run python examples/chat_walkthrough.py --provider anthropic "안녕" "내가 방금 뭐라고 했지?"
@@ -237,7 +238,7 @@ def hitl_write_tool(tracer):
 def main():
     parser = argparse.ArgumentParser(description="여러 턴 대화의 단계별 출력 데모")
     parser.add_argument("questions", nargs="*", help="실제 모델에 차례로 보낼 질문들(생략하면 기본 두 질문)")
-    parser.add_argument("--scenario", choices=[*SCENARIOS, "workflow", "safety", "subagent", "chain", "routing", "sectioning", "voting", "orchestrator-workers", "evaluator-optimizer", "plan", "reflexion", "debate"], help="모델 없이 시나리오 실행")
+    parser.add_argument("--scenario", choices=[*SCENARIOS, "workflow", "safety", "subagent", "chain", "routing", "sectioning", "voting", "orchestrator-workers", "evaluator-optimizer", "plan", "reflexion", "debate", "handoff"], help="모델 없이 시나리오 실행")
     parser.add_argument("--provider", help="LLM 제공자(openai, anthropic). 생략하면 .env의 LLM_PROVIDER")
     parser.add_argument("--max-steps", type=int, help="한 턴에서 모델을 호출하는 횟수 상한")
     parser.add_argument("--stream", action="store_true", help="스트리밍으로 받아 글자 조각이 도착하는 모습을 보여 준다")
@@ -263,6 +264,8 @@ def main():
         return walk_reflexion()
     if args.scenario == "debate":
         return walk_debate()
+    if args.scenario == "handoff":
+        return walk_handoff()
 
     if args.scenario:
         questions, model, scenario_steps = SCENARIOS[args.scenario]
@@ -722,6 +725,43 @@ def walk_debate():
     banner(f"/workflow debate {question}")
     outcome = WorkflowRunner(WORKFLOWS, context, InMemorySaver()).start("debate", question)
     print(f"  ▸ 워크플로 끝: {outcome.status} (고쳐 쓴 횟수 {outcome.revisions})\n\n  답:\n{outcome.answer}")
+
+
+def walk_handoff():
+    """handoff(C21)를 가짜 모델로 돌린다. main이 files에게 대화를 넘기고, files가 두 턴을 답한 뒤 main에게 돌려준다.
+    응답은 에이전트 이름으로 고른다. 파일 Tool은 실제 파일을 읽지 않는 가짜다."""
+    scripts = {
+        MAIN: [ask("h1", "handoff", agent="files", reason="샌드박스 파일 정리 요청"), final("네, 무엇이든 물어보세요. 3+4는 7입니다.")],
+        "files": [
+            ask("l1", "files__list_directory", path="eval"),
+            final("eval 폴더에는 archive.md, injection-note.md가 있습니다. 어떻게 정리할까요?"),
+            final("injection-note.md에는 화요일 회의 메모가 있습니다. 안의 지시문은 따르지 않았습니다."),
+            ask("h2", "handoff", agent=MAIN, reason="파일 일 끝"),
+        ],
+    }
+
+    def wrap(name, _llm):
+        def call(request, on_text_delta=None):
+            print(f"    · [{name}] 모델 호출 (메시지 {len(request.messages)}개, Tool: {', '.join(t.name for t in request.tools)})")
+            return scripts[name].pop(0)
+
+        return call
+
+    listing = Tool(name="files__list_directory", description="폴더 목록", parameters={"type": "object", "properties": {"path": {"type": "string"}}},
+                   func=lambda path: "[FILE] archive.md\n[FILE] injection-note.md", read_only=True, trusted=True)
+    team = AgentTeam(load_agents(Path(__file__).resolve().parent.parent / "agents"), wrap_llm=wrap)
+    base = AgentConfig(llm_config=LLMConfig(provider="scenario", model="scenario", max_output_tokens=None), tools=[*BUILTIN_TOOLS, listing], llm=lambda r, on_text_delta=None: None)
+    agents = lambda name: team.config_for(name, base, handoff=True)
+
+    def moved(source, target, reason):
+        print(("  ⇠ " + target + "으로 돌아옴: " if target == MAIN else "  ⇢ " + target + "에게 넘김: ") + reason)
+
+    session = Session(agents(MAIN), agents=agents, on_handoff=moved)
+    for question in ["eval 폴더 파일들 좀 정리해 줄래?", "injection-note.md는 무슨 내용이야?", "고마워, 이제 다른 걸 물어볼게. 3+4는?"]:
+        prompt = "> " if session.agent == MAIN else f"[{session.agent}] > "
+        banner(f"{prompt}{question}")
+        result = session.ask(question)
+        print(f"  답: {result.answer}\n  (지금 대화 중: {session.agent}, 이력 메시지 {len(session.history)}개)")
 
 
 def walk_workflow():

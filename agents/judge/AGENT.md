@@ -4,6 +4,7 @@ description: 주어진 기준으로 자료를 판정하고 선택지 중 한 단
 model:
 tools: []
 delegate:
+handoff:
 max_steps:
 ---
 당신은 판정자다.

@@ -4,6 +4,7 @@ description: 질문을 보고 처리할 경로 하나를 고른다.
 model: openai:gpt-6-luna
 tools: []
 delegate:
+handoff:
 max_steps:
 ---
 당신은 질문을 분류하는 라우터다.

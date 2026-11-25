@@ -25,8 +25,9 @@ from .builtin import BUILTIN_TOOLS
 from .registry import DEFAULT_MAX_RESULT_CHARS, ToolRegistry
 
 DELEGATE = "delegate"  # 맡기기 Tool. 만드는 곳은 core/agents(맡길 에이전트를 알아야 한다)
+HANDOFF = "handoff"  # 넘기기 Tool(C21). 만드는 곳은 core/agents. 세션의 대화 에이전트만 받는다
 PARENT_ONLY = {"ask_user", "load_skill"}  # 되묻기와 스킬은 main만 쓴다. 하위 에이전트는 사용자를 볼 수 없다(C12).
-NO_ASKING = {"ask_user", DELEGATE}  # 워크플로 노드 안에서는 되묻지 않고(체크포인트에 남지 않는다) 다시 맡기지 않는다(C17 Q19).
+NO_ASKING = {"ask_user", DELEGATE, HANDOFF}  # 워크플로 노드 안에서는 되묻지 않고(체크포인트에 남지 않는다) 다시 맡기지 않는다(C17 Q19).
 WEB = "web__"
 GLOB = "*?["  # 패턴 문자
 

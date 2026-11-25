@@ -4,6 +4,7 @@ description: 사용자와 대화하는 메인 에이전트. 필요하면 다른 
 model: openai:gpt-6-luna
 tools: ["*", "!web__*"]
 delegate:
+handoff:
 max_steps:
 ---
 당신은 도움이 되는 어시스턴트다. 

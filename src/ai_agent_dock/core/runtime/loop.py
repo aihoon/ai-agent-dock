@@ -41,6 +41,7 @@ def run_agent(config: AgentConfig, question: str, *, history: list[Message] | No
     settings는 세션 내내 같은 설정이고, 모든 스텝의 요청에 그대로 실린다. history는 이전 턴들의 이력이다.
     넘긴 목록은 바꾸지 않고 복사해서 쓰며, 이번 턴이 반영된 전체 이력을 결과(AgentResult.history)로 돌려준다.
     생략하면 빈 이력으로 시작한다(이전 턴을 기억하지 않는다).
+    ends_turn인 Tool(넘기기)을 실행하면 모델을 다시 부르지 않고 멈춘다(status "handoff").
 
     max_steps 우선순위: config.max_steps > 환경 변수 AGENT_MAX_STEPS > 기본값 10.
     마지막 스텝은 Tool을 막고 FINAL_STEP_NOTE를 붙여 부르는 마무리 호출이다(상태는 max_steps).
@@ -91,9 +92,11 @@ def run_agent(config: AgentConfig, question: str, *, history: list[Message] | No
             log.info("step %d: 최종 답변", step)
             return _finish(tracer, turn_started, AgentResult(answer=answer, status="completed", steps=step, history=history, usage=usage))
 
+        ended = False
         for call in tool_calls:
             started = time.perf_counter()
             content, is_error = _run_call(config, tools_by_name, call, denied)
+            ended = ended or (not is_error and call.name in tools_by_name and tools_by_name[call.name].ends_turn)
             if tracer is not None:
                 tracer.record(
                     "tool",
@@ -105,6 +108,8 @@ def run_agent(config: AgentConfig, question: str, *, history: list[Message] | No
                     is_error=is_error,
                 )
             history.append(ToolMessage(tool_call_id=call.id, content=content, is_error=is_error))
+        if ended:  # 넘기기: 이 에이전트는 답을 쓰지 않는다. 세션이 다음 에이전트로 이어 돈다(C21 Q7).
+            return _finish(tracer, turn_started, AgentResult(answer=None, status="handoff", steps=step, history=history, usage=usage))
 
     # max_steps가 1보다 작아 한 번도 부르지 않았다. 보통은 마지막 스텝의 마무리 답으로 위에서 끝난다.
     log.warning("최대 스텝(%d)에 도달해 종료", max_steps)

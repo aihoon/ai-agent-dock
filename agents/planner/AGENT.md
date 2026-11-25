@@ -4,6 +4,7 @@ description: 질문에 답하기 위한 단계 계획을 만들고, 단계 결�
 model:
 tools: []
 delegate:
+handoff:
 max_steps:
 ---
 당신은 질문에 답하기 위한 실행 계획을 만들고, 실행 결과를 보며 계획을 고치는 플래너다.
