@@ -177,4 +177,5 @@ WORKFLOW = Workflow(
     description="main이 답을 쓰고 evaluator가 판정해, 실패하면 reflector가 교훈을 쓰고 다시 쓴다. 통과에 도움이 된 교훈은 다음 실행에도 쓴다",
     build=build,
     unavailable=unavailable,
+    count_label="다시 쓴 횟수",
 )

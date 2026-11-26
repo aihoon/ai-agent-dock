@@ -54,6 +54,7 @@ class AgentConfig:
     tracer: Tracer | None = None  # 추적 기록(세션 설정, 턴, 스텝, LLM 호출, Tool 실행). None이면 기록하지 않는다.
     safety: SafetyChecks | None = None  # 항상 거는 고정 검사(C11 D19). 진입점이 core/safety의 with_safety로 넣는다.
     hooks: HookSet = field(default_factory=HookSet)  # 사용자가 설치한 Hook(C11 D20). hooks.json 또는 코드로 더한다.
+    on_result: Callable[[AgentResult], None] | None = None  # 턴이 끝날 때 결과를 받는 함수(C23 Q1). 평가가 노드와 하위 에이전트의 결과를 모은다. 채팅은 비운다.
 
 
 class SafetyChecks(Protocol):

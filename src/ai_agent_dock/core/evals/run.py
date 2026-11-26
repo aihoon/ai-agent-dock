@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
@@ -31,6 +32,11 @@ class CaseResult:
     verdicts: list[str] = field(default_factory=list)  # voting 실행마다 "판정 (표 1, 표 2, 표 3)". 판정자 1번과 다수결의 흔들림을 비교한다(C15).
     llm_verdicts: list[str] = field(default_factory=list)  # llm_judge 실행마다 "통과 3/4 (실패: 출처 - 이유)" 또는 "오류: …"(C17 Q17)
     disagreements: int = 0  # 규칙 판정과 LLM 판정이 어긋난 실행 수. 오류와 판정 안 한 기준은 세지 않는다.
+    # 실행 한 번의 평균 비용(C23 Q4). 마지막 질문에서 돈 모든 에이전트(노드, 하위 에이전트)의 합이고, LLM 판정은 뺀다.
+    llm_calls: float = 0
+    input_tokens: float = 0
+    output_tokens: float = 0
+    seconds: float = 0
 
     @property
     def passed(self) -> bool:
@@ -65,6 +71,7 @@ def evaluate(
     delegated: Callable[[], list[AgentResult]] | None = None,
     judge: Callable[[str], str] | None = None,
     session: Callable[[AgentConfig], Session] | None = None,
+    finished: Callable[[], list[AgentResult]] | None = None,
 ) -> CaseResult:
     """케이스를 repeat번 실행한다. 실행마다 설정을 새로 만든다(미리 적은 답이 실행마다 처음부터 쓰이도록).
 
@@ -75,18 +82,35 @@ def evaluate(
     judge는 evaluator에게 평가자 프롬프트를 주고 답을 받는 함수다(C17). llm_judge 케이스에서 실행마다 부르고 기록만 한다.
     session은 main 설정으로 채팅과 같은 세션을 만드는 함수다(C21 Q20). 넘기기가 있으면 앞선 턴의 대화 에이전트가 마지막 질문으로 이어진다.
     판정의 Tool은 마지막 턴에서 돈 모든 에이전트의 호출을 센다. expect_agent는 마지막 턴이 끝났을 때 대화 중인 에이전트다.
+    finished는 그동안 끝난 모든 에이전트의 결과(설정의 on_result가 모은 것)를 꺼내고 비우는 함수다(C23).
+    워크플로 케이스는 이것으로 노드 안의 Tool을 판정하고, 모든 케이스가 이것으로 비용을 센다.
     """
     take = delegated or (lambda: [])
+    collect = finished or (lambda: [])
     outcome = CaseResult(id=case.id, category=case.category, runs=repeat, passes=0)
+    spent = [0, 0, 0, 0.0]  # LLM 호출, 입력 토큰, 출력 토큰, 초
+
+    def spend(done: list[AgentResult], seconds: float) -> None:
+        spent[0] += sum(r.steps for r in done)
+        spent[1] += sum(r.usage.input_tokens for r in done)
+        spent[2] += sum(r.usage.output_tokens for r in done)
+        spent[3] += seconds
+
     for _ in range(repeat):
         config = make_config(case)
         if case.workflow:
-            failures, result = run_workflow_case(case, workflows(config))
+            collect()  # 앞 케이스의 LLM 판정 호출 등은 버린다.
+            started = time.perf_counter()
+            failures, result, children = run_workflow_case(case, workflows(config), collect)
+            spend(children, time.perf_counter() - started)
+            take()  # 노드 안 delegate의 결과는 on_result로 이미 모였다. 두 번 세지 않는다.
+            outcome.tools = [name for c in children for name in called_tools(c)]
             outcome.answer = result.answer
             if result.verdict:
                 outcome.verdicts.append(f"{result.verdict} ({', '.join(result.ballots or [])})")
-            if case.llm_judge and judge:  # 워크플로는 이력이 없어 근거 없이 본다(Q16). None은 "넘기지 못함"(Q29)
-                record_llm_judge(outcome, judge, evaluator_prompt(case.question, result.answer or "", None), not failures)
+            if case.llm_judge and judge:  # 노드의 Tool 결과가 근거다. 없으면(코드로 검색) None, 즉 "넘기지 못함"(C17 Q29, C23 Q3)
+                evidence = [e for c in children for e in tool_evidence(c.history)] or None
+                record_llm_judge(outcome, judge, evaluator_prompt(case.question, result.answer or "", evidence), not failures)
             if failures:
                 outcome.failures = failures
             else:
@@ -99,8 +123,11 @@ def evaluate(
         if case.compact_before and compactor is not None:
             chat.history = compactor(chat.history)
         take()  # 앞선 턴에서 맡긴 것은 버린다.
+        collect()
         before = len(chat.history)
+        started = time.perf_counter()
         full = chat.ask(case.question)
+        spend(collect(), time.perf_counter() - started)
         result = replace(full, history=full.history[before:])
         children = take()
         failures = check(case, result, children)
@@ -115,6 +142,8 @@ def evaluate(
             outcome.failures = failures
         else:
             outcome.passes += 1
+    outcome.llm_calls, outcome.input_tokens, outcome.output_tokens = (round(v / repeat, 1) for v in spent[:3])
+    outcome.seconds = round(spent[3] / repeat, 1)
     return outcome
 
 
@@ -129,15 +158,19 @@ def record_llm_judge(outcome: CaseResult, judge: Callable[[str], str], prompt: s
     outcome.disagreements += rule_passed == any(v.result == FAIL for v in verdicts)
 
 
-def run_workflow_case(case: Case, runner: WorkflowRunner) -> tuple[list[str], Outcome]:
-    """(어긋난 규칙, 워크플로 결과). 판정은 최종 답과 마지막 상태, 고쳐 쓴 횟수, 고른 경로, 판정으로 한다."""
+def run_workflow_case(
+    case: Case, runner: WorkflowRunner, finished: Callable[[], list[AgentResult]] = lambda: []
+) -> tuple[list[str], Outcome, list[AgentResult]]:
+    """(어긋난 규칙, 워크플로 결과, 노드에서 돈 에이전트 결과). 최종 답, 마지막 상태, 횟수, 경로, 판정과 함께
+    노드 에이전트가 부른 Tool과 그 오류도 main 케이스와 같은 check로 본다(C23 Q2)."""
     decisions = list(case.workflow_decisions)
     result = runner.start(case.workflow, case.question)
     while result.status == WAITING:
         result = runner.resume(result.run_id, decisions.pop(0) if decisions else "approve")
     answer = AgentResult(answer=result.answer, status="completed", steps=0, history=[])
+    children = finished()
     failures = check_workflow(case, result.status, result.revisions, result.route, routes=result.routes, verdict=result.verdict, workers=result.workers)
-    return check(case, answer) + failures, result
+    return check(case, answer, children) + failures, result, children
 
 
 def last_passed(directory: Path) -> set[str] | None:

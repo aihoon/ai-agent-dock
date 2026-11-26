@@ -131,4 +131,5 @@ WORKFLOW = Workflow(
     description="main이 답을 쓰고 evaluator가 기준표로 평가해, 모든 기준을 통과하거나 상한에 닿을 때까지 고쳐 쓴다",
     build=build,
     unavailable=unavailable,
+    count_label="고쳐 쓴 횟수",
 )

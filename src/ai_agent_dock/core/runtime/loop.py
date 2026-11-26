@@ -14,7 +14,6 @@ import time
 from ai_agent_dock.env import env_int
 
 from ..llm import AssistantMessage, LLMRequest, Message, Tool, ToolCall, ToolMessage, UserMessage
-from ..observability import Tracer
 from .types import AgentResult, AgentConfig, Usage
 
 log = logging.getLogger(__name__)
@@ -74,7 +73,7 @@ def run_agent(config: AgentConfig, question: str, *, history: list[Message] | No
             )
         )
         if tracer is not None:
-            tracer.llm(step, _ms_since(started), config.llm_config, response)
+            tracer.llm(step, _ms_since(started), config.llm_config, response, tools=[t.name for t in config.tools])
         usage.add(response)
         # 응답을 이력에 이어 붙여야 모델이 다음 호출에서 자신의 이전 판단을 본다.
         # 글은 최종 답이든 Tool 요청과 함께 온 중간 설명이든 거른다. 바뀌었으면(예: 키를 가림) 원본이 남은 raw는 버린다.
@@ -87,10 +86,10 @@ def run_agent(config: AgentConfig, question: str, *, history: list[Message] | No
 
         if last:
             log.warning("최대 스텝(%d)에 도달해 마무리 답으로 종료", max_steps)
-            return _finish(tracer, turn_started, AgentResult(answer=answer, status="max_steps", steps=step, history=history, usage=usage))
+            return _finish(config, turn_started, AgentResult(answer=answer, status="max_steps", steps=step, history=history, usage=usage))
         if not tool_calls:
             log.info("step %d: 최종 답변", step)
-            return _finish(tracer, turn_started, AgentResult(answer=answer, status="completed", steps=step, history=history, usage=usage))
+            return _finish(config, turn_started, AgentResult(answer=answer, status="completed", steps=step, history=history, usage=usage))
 
         ended = False
         for call in tool_calls:
@@ -109,21 +108,23 @@ def run_agent(config: AgentConfig, question: str, *, history: list[Message] | No
                 )
             history.append(ToolMessage(tool_call_id=call.id, content=content, is_error=is_error))
         if ended:  # 넘기기: 이 에이전트는 답을 쓰지 않는다. 세션이 다음 에이전트로 이어 돈다(C21 Q7).
-            return _finish(tracer, turn_started, AgentResult(answer=None, status="handoff", steps=step, history=history, usage=usage))
+            return _finish(config, turn_started, AgentResult(answer=None, status="handoff", steps=step, history=history, usage=usage))
 
     # max_steps가 1보다 작아 한 번도 부르지 않았다. 보통은 마지막 스텝의 마무리 답으로 위에서 끝난다.
     log.warning("최대 스텝(%d)에 도달해 종료", max_steps)
-    return _finish(tracer, turn_started, AgentResult(answer=answer, status="max_steps", steps=max_steps, history=history, usage=usage))
+    return _finish(config, turn_started, AgentResult(answer=answer, status="max_steps", steps=max_steps, history=history, usage=usage))
 
 
 def _ms_since(started: float) -> float:
     return (time.perf_counter() - started) * 1000
 
 
-def _finish(tracer: Tracer | None, turn_started: float, result: AgentResult) -> AgentResult:
-    """턴 끝 줄(턴 전체 걸린 시간 포함)을 쓰고 결과를 돌려준다. 추적을 끈 경우에도 결과는 그대로 돌려준다."""
-    if tracer is not None:
-        tracer.record("turn_end", result.steps, _ms_since(turn_started), answer=result.answer, status=result.status)
+def _finish(config: AgentConfig, turn_started: float, result: AgentResult) -> AgentResult:
+    """턴 끝 줄(턴 전체 걸린 시간 포함)을 쓰고, on_result에 결과를 넘기고(C23), 결과를 돌려준다."""
+    if config.tracer is not None:
+        config.tracer.record("turn_end", result.steps, _ms_since(turn_started), answer=result.answer, status=result.status)
+    if config.on_result is not None:
+        config.on_result(result)
     return result
 
 

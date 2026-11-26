@@ -77,6 +77,13 @@ def test_cases_with_real_model(request, tmp_path):
         delegated.clear()
         return taken
 
+    finished = []  # 끝난 모든 에이전트의 결과(on_result). 워크플로 노드의 Tool 판정과 비용에 쓴다(C23).
+
+    def take_finished():
+        taken = list(finished)
+        finished.clear()
+        return taken
+
     summarize_config = llm_config  # 컴팩션 요약도 같은 모델로 한다(평가에서는 COMPACT_LLM_* 설정을 쓰지 않는다)
 
     def summarize_text(text):  # 컴팩션 요약. 평가 결과 요약(summarize)과 이름이 겹치지 않게 한다.
@@ -100,6 +107,7 @@ def test_cases_with_real_model(request, tmp_path):
                 tools=pool.tools(),
                 approve=scripted_approver(case.approvals),  # 하위 에이전트의 승인도 Tool 이름으로 답한다.
                 tracer=tracer,
+                on_result=finished.append,  # team.config_for와 노드가 이 설정을 복사하므로 모든 에이전트가 넘긴다.
             )
             base = with_safety(config, policy=policy)[0]  # 채팅과 같은 Safety(C11 D17)
             last["base"], last["case"], last["kb"] = base, case, kb  # routing 케이스가 경로마다 에이전트를 만들 때(C14), reflexion 케이스가 교훈을 꺼낼 때(C19) 쓴다.
@@ -141,7 +149,7 @@ def test_cases_with_real_model(request, tmp_path):
         def run_case(case):
             if case.knowledge == "notion" and notion_knowledge is None:  # 건너뛰지 않고 실패로 남긴다(C22 4.6절)
                 return CaseResult(id=case.id, category=case.category, runs=repeat, passes=0, failures=["Notion 색인이 없다(uv run python scripts/ingest_notion.py)"])
-            return evaluate(case, make_config, repeat, compactor=compactor, workflows=workflows, delegated=take_delegated, judge=judge, session=session)
+            return evaluate(case, make_config, repeat, compactor=compactor, workflows=workflows, delegated=take_delegated, judge=judge, session=session, finished=take_finished)
 
         results = [run_case(case) for case in cases]
 

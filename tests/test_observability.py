@@ -33,6 +33,7 @@ def test_one_turn_writes_ordered_lines_with_the_same_trace_id(tmp_path):
     assert {r["session"] for r in rows} == {tracer.session_id}
     assert all("." in r["time"] for r in rows)  # 밀리초까지 찍는다
     assert rows[2]["name"] == "calculate" and rows[2]["result"] == "5"
+    assert "calculate" in rows[1]["tools"]  # 요청에 실린 Tool 이름(C23 Q5)
     assert rows[-1]["duration_ms"] is not None and rows[-1]["answer"] == "5입니다"
     assert tracer.path == tmp_path / f"{tracer.session_id}.jsonl"  # 세션별 파일
 

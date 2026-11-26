@@ -165,4 +165,5 @@ WORKFLOW = Workflow(
     description="문서를 찾아 grader가 조각마다 관련성을 평가하고, correct가 없으면 검색어를 재작성해 다시 찾은 뒤 고른 조각으로 답한다",
     build=build,
     unavailable=unavailable,
+    count_label="다시 찾은 횟수",
 )

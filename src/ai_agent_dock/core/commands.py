@@ -381,18 +381,28 @@ def _reflection_delete(ctx: CommandContext, arg: str) -> str:
 STATUS = {"approved": "승인", "rejected": "거부", "no_evidence": "근거 없음", "completed": "완료", "gate_failed": "gate 실패", "passed": "통과", "limit": "상한", "eval_failed": "평가 오류", "agreed": "합의", "decided": "정리", "failed": "실패"}
 
 
+def _count(outcome: Outcome, count_label: str) -> str:
+    return f" ({count_label} {outcome.revisions})" if count_label else ""
+
+
+def outcome_line(outcome: Outcome, count_label: str) -> str:
+    """끝 줄(outcome message): 한국어 상태와 워크플로의 횟수 이름(C23 Q6). 채팅과 walkthrough가 함께 쓴다."""
+    return f"▸ 워크플로 끝: {STATUS.get(outcome.status, outcome.status)}{_count(outcome, count_label)}"
+
+
 def _report(ctx: CommandContext, outcome: Outcome) -> str:
     """워크플로 결과를 문장으로. 승인 대기면 승인 요청을 두고, 끝났으면 결과를 채팅 이력에 한 턴으로 붙인다(C10 D5)."""
+    workflow = ctx.runner().workflows.get(outcome.workflow)
+    label = workflow.count_label if workflow else ""
     if outcome.status == WAITING:
         ctx.waiting = outcome
-        return f"[승인 요청] {outcome.workflow} (고쳐 쓴 횟수 {outcome.revisions})\n{outcome.draft}"
+        return f"[승인 요청] {outcome.workflow}{_count(outcome, label)}\n{outcome.draft}"
     ctx.waiting = None
     if outcome.answer:  # 승인과 근거 없음만 붙인다. 거부는 붙이지 않는다.
         ctx.session.history = [*ctx.session.history, UserMessage(content=outcome.question), AssistantMessage(content=outcome.answer)]
         ctx.ensure_record(auto_name(outcome.question))
         ctx.save()
-    label = STATUS.get(outcome.status, outcome.status)
-    return f"▸ 워크플로 끝: {label} (고쳐 쓴 횟수 {outcome.revisions})" + (f"\n{outcome.answer}" if outcome.answer else "")
+    return outcome_line(outcome, label) + (f"\n{outcome.answer}" if outcome.answer else "")
 
 
 def _no_workflows(ctx: CommandContext) -> str | None:

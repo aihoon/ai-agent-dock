@@ -46,13 +46,14 @@ class Tracer:
         self.turn += 1
         self.trace_id = uuid.uuid4().hex[:12]
 
-    def llm(self, step: int, duration_ms: float, config: LLMConfig, response: LLMResponse) -> None:
-        """LLM 호출 한 번의 줄: 모델, 답 텍스트, Tool 요청, 토큰 수."""
+    def llm(self, step: int, duration_ms: float, config: LLMConfig, response: LLMResponse, tools: list[str] | None = None) -> None:
+        """LLM 호출 한 번의 줄: 모델, 요청에 실린 Tool 이름(C23 Q5), 답 텍스트, Tool 요청, 토큰 수."""
         self.record(
             "llm",
             step,
             duration_ms,
             model=f"{config.provider}:{config.model}",  # 에이전트마다 모델이 다를 수 있다(C14 Q9).
+            tools=tools or [],  # 모델이 Tool을 안 부른 것이 Tool이 없어서인지 고르지 않아서인지 본다(C21 Q24).
             text=response.text,
             tool_calls=[{"name": c.name, "arguments": c.arguments} for c in response.tool_calls],
             input_tokens=response.input_tokens,

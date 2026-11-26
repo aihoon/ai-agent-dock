@@ -50,6 +50,7 @@ class Workflow:
     description: str
     build: Callable[[WorkflowContext], StateGraph]  # 그래프를 만든다(컴파일은 실행기가 체크포인트와 함께 한다).
     unavailable: Callable[[WorkflowContext], str | None] = lambda ctx: None  # 시작할 수 없는 이유. None이면 시작한다(C10 D16).
+    count_label: str = ""  # 끝 줄에 보일 횟수(revisions)의 이름(C23 Q6). 비우면 횟수를 보이지 않는다(늘 0인 워크플로).
 
 
 @dataclass

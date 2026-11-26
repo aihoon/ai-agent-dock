@@ -195,4 +195,5 @@ WORKFLOW = Workflow(
     description="토론자 3명이 각자 찾아 답하고 서로의 답을 보며 고친다. 결론이 모두 같으면 끝, 상한까지 갈리면 aggregator가 정한다",
     build=build,
     unavailable=unavailable,
+    count_label="토론 라운드",
 )

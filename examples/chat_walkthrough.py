@@ -48,6 +48,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from walkthrough import Tracer, ask, banner, clip, describe, scripted  # C1 워크스루의 도구를 재사용한다.
 
 from ai_agent_dock.core.agents import MAIN, AgentTeam, build_agent_index, load_agents
+from ai_agent_dock.core.commands import outcome_line
 from ai_agent_dock.core.hitl import Approval, ask_in_terminal
 from ai_agent_dock.core.llm import LLMConfig, LLMResponse, Tool, ToolCall, call_llm, config_from_env
 from ai_agent_dock.core.memory import MemoryStore
@@ -62,6 +63,13 @@ from ai_agent_dock.core.session import Session
 from ai_agent_dock.core.skills import make_load_skill_tool, scan_skills
 from ai_agent_dock.core.tools import BUILTIN_TOOLS
 from ai_agent_dock.workflows import WORKFLOWS
+
+COUNT_LABELS = {w.name: w.count_label for w in WORKFLOWS}
+
+
+def end_line(outcome):
+    """채팅과 같은 끝 줄(C23 Q6): 한국어 상태와 워크플로의 횟수 이름."""
+    return outcome_line(outcome, COUNT_LABELS.get(outcome.workflow, ""))
 
 SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"  # 프로젝트 루트의 skills/
 KNOWLEDGE_DIR = Path(__file__).resolve().parent.parent / "knowledge"  # 프로젝트 루트의 knowledge/
@@ -657,10 +665,10 @@ def walk_parallel(name):
     started = time.perf_counter()
     outcome = WorkflowRunner(WORKFLOWS, context, InMemorySaver()).start(name, question)
     if name == "evaluator-optimizer":
-        print(f"  ▸ 워크플로 끝: {outcome.status} (고쳐 쓴 횟수 {outcome.revisions})\n\n  답:\n{outcome.answer}")
+        print(f"  {end_line(outcome)}\n\n  답:\n{outcome.answer}")
         return
     if name == "plan-and-execute":
-        print(f"  ▸ 상태: {outcome.status} (계획 고침 {outcome.revisions}번, 실행한 worker: {', '.join(outcome.workers or [])})\n\n  답:\n{outcome.answer}")
+        print(f"  {end_line(outcome)}, 실행한 worker: {', '.join(outcome.workers or [])}\n\n  답:\n{outcome.answer}")
         return
     print(f"  ▸ 걸린 시간 {time.perf_counter() - started:.1f}초 (가지의 모델 호출은 1초씩. 차례로 돌았다면 그 합만큼 걸린다)\n  답:\n{outcome.answer}")
 
@@ -705,7 +713,7 @@ def walk_corrective_rag():
     )
     banner(f"/workflow corrective-rag {question}")
     outcome = WorkflowRunner(WORKFLOWS, context, InMemorySaver()).start("corrective-rag", question)
-    print(f"  ▸ 워크플로 끝: {outcome.status} (다시 찾은 횟수 {outcome.revisions})\n\n  답:\n{outcome.answer}")
+    print(f"  {end_line(outcome)}\n\n  답:\n{outcome.answer}")
 
 
 def walk_reflexion():
@@ -740,7 +748,7 @@ def walk_reflexion():
         for question in ["이 프로젝트 문서에서 에이전트 루프의 최대 스텝 기본값은?", "2의 10제곱에 3을 더하면?"]:
             banner(f"/workflow reflexion {question}")
             outcome = runner.start("reflexion", question)
-            print(f"  ▸ 워크플로 끝: {outcome.status} (고쳐 쓴 횟수 {outcome.revisions})\n\n  답:\n{outcome.answer}")
+            print(f"  {end_line(outcome)}\n\n  답:\n{outcome.answer}")
             print("\n/reflections\n" + "\n".join(f"  {n}. {text}" for n, text in enumerate(reflections.items(), start=1)))
 
 
@@ -769,7 +777,7 @@ def walk_debate():
     question = "이 프로젝트 문서로 보면 스킬과 MCP Tool은 모델에게 같은 방식으로 보여?"
     banner(f"/workflow debate {question}")
     outcome = WorkflowRunner(WORKFLOWS, context, InMemorySaver()).start("debate", question)
-    print(f"  ▸ 워크플로 끝: {outcome.status} (고쳐 쓴 횟수 {outcome.revisions})\n\n  답:\n{outcome.answer}")
+    print(f"  {end_line(outcome)}\n\n  답:\n{outcome.answer}")
 
 
 def walk_handoff():

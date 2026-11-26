@@ -205,4 +205,5 @@ WORKFLOW = Workflow(
     description="planner가 단계 계획을 만들고, worker가 한 단계씩 차례로 실행하며, 단계마다 남은 계획을 다시 보고 고친다",
     build=build,
     unavailable=unavailable,
+    count_label="계획 고친 횟수",
 )

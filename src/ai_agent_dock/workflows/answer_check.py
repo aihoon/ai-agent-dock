@@ -129,4 +129,5 @@ WORKFLOW = Workflow(
     description="문서를 검색해 출처를 붙여 답하고, 출처가 틀리면 고쳐 쓴 뒤 사람 승인을 받는다",
     build=build,
     unavailable=unavailable,
+    count_label="고쳐 쓴 횟수",
 )
