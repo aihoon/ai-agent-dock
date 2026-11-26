@@ -4,7 +4,7 @@
 Tool 호출, 스킬, 세션 기반 대화를 갖춘 플랫폼을 만들고, 그 위에 스킬·플러그인을 설치하거나 코드 워크플로를 얹어 **애플리케이션**을 만든다.
 
 ## 현재 단계
-C21 완료(Handoff: main이 `handoff(agent, reason)` Tool로 대화를 files나 web 에이전트에게 넘기면, 같은 턴에서 넘겨받은 에이전트가 이어 답하고 다음 턴들에서도 사용자와 직접 대화한다. 일이 끝나면 `handoff(main)`으로 돌려준다. OpenAI Swarm과 Agents SDK의 handoff 방식). 워크플로 패턴 트랙(C13~C24)의 아홉 번째 단계다. 다음은 C22 Corrective RAG, C23 패턴 비교와 정리, C24 플랫폼과 프로덕션 하드닝. 태그: `c0`, `c1`, `c1.1`, `c2`, `c3`, `c4`, `c5`, `c5.1`, `c6`, `c7`, `c8`, `c9`, `c10`, `c11`, `c12`, `c13`, `c14`, `c14.1`, `c15`, `c16`, `c17`, `c18`, `c19`, `c20`.
+C22 완료(Corrective RAG: 문서를 찾은 뒤 grader 에이전트가 조각마다 관련성을 correct, ambiguous, incorrect로 평가하고, correct가 없으면 검색어를 핵심 낱말로 재작성해 다시 찾은 뒤(최대 2번), 고른 조각만으로 출처를 붙여 답한다. CRAG(Yan 외 2024)). 워크플로 패턴 트랙(C13~C24)의 열 번째 단계다. 다음은 C23 패턴 비교와 정리, C24 플랫폼과 프로덕션 하드닝. 태그: `c0`, `c1`, `c1.1`, `c2`, `c3`, `c4`, `c5`, `c5.1`, `c6`, `c7`, `c8`, `c9`, `c10`, `c11`, `c12`, `c13`, `c14`, `c14.1`, `c15`, `c16`, `c17`, `c18`, `c19`, `c20`, `c21`.
 
 ## 실행
 
@@ -32,6 +32,7 @@ uv run python examples/chat_walkthrough.py --scenario plan                  # pl
 uv run python examples/chat_walkthrough.py --scenario reflexion             # 질문 1 실패 → reflect 교훈 → 다시 써 통과 → 교훈 저장, 질문 2는 교훈을 받아 첫 시도 통과(모델 없이)
 uv run python examples/chat_walkthrough.py --scenario debate                # 토론자 3명 첫 답이 갈림 → 서로의 답을 보고 고침 → 모두 같음, 최종 답에서 [다른 답 검토] 절을 뺌(모델 없이)
 uv run python examples/chat_walkthrough.py --scenario handoff               # main → files로 넘김 → 다음 턴도 files → 3+4에 main으로 돌아옴, 모델 호출마다 에이전트와 Tool 목록(모델 없이)
+uv run python examples/chat_walkthrough.py --scenario corrective-rag        # 첫 검색 correct 0 → grader가 검색어 재작성 → 재검색에서 correct → 고른 조각만으로 답(모델 없이, 가짜 색인)
 ```
 
 ### 채팅 명령
@@ -71,6 +72,7 @@ uv run python examples/chat_walkthrough.py --scenario handoff               # ma
 /workflow plan-and-execute 이 프로젝트 문서에서 에이전트 루프의 최대 스텝 기본값을 찾고, 그 값의 제곱을 계산해 줘.
 /workflow reflexion 이 프로젝트 문서에서 에이전트 루프의 최대 스텝 기본값은 얼마야?
 /workflow debate 이 프로젝트의 체크포인트 저장을 지금 SQLite로 두는 게 나을까, Postgres로 옮기는 게 나을까?
+/workflow corrective-rag 이 프로젝트 문서에서 청크 하나의 최대 글자 수는 얼마야?
 ```
 
 - `answer-check`: 답 작성(에이전트, 문서 검색) → 출처 검사(코드) → 실패하면 이유를 붙여 고쳐 쓰기(최대 `WORKFLOW_MAX_REVISIONS`, 기본 4번, C17에서 2에서 올림) → 사람 승인. 상한을 넘으면 "관련 문서에서 근거를 찾지 못했습니다"로 끝난다. 문서 색인이 없으면 시작하지 않는다. 이 워크플로 안에서는 되묻기(`ask_user`)를 쓰지 않는다.
@@ -121,6 +123,11 @@ uv run python examples/chat_walkthrough.py --scenario handoff               # ma
   - 상한까지 갈리면 C15 aggregator가 마지막 라운드 답들을 읽고 같은 뜻인지 판단해 과반의 답을 쓴다(`정리`, decided). 첫 라운드에 답이 하나도 없으면 `실패`(failed).
   - node message는 `▸ Propose 완료: 아니요 | 예 | 아니요 → 갈림` → `▸ Debate 1/4 시작/완료` → (상한이면) `▸ Decide 시작: aggregator`다.
   - main과 비교: 평가(문서 3개)에서는 둘 다 늘 맞혀 품질 차이가 없었고 debate가 LLM 호출 2~11배를 썼다. 웹을 켠 채팅의 판단 질문에서는 debate가 결론을 분명히 내고 출처를 붙였다(토큰 13~17배, 시간 4~6배).
+- `corrective-rag`(C22): retrieve(색인에서 조각 5개) → grade(grader 에이전트 `agents/grader/AGENT.md`, Tool 없음)가 조각마다 관련성을 `correct`, `ambiguous`, `incorrect`로 평가해 JSON `{"grades", "rewrite"}`로 답한다 → `correct`가 없으면 grader가 재작성한 검색어로 재검색(최대 2번) → generate(main, Tool 없음)가 `correct`와 `ambiguous` 조각만 받아 출처와 함께 답한다 → 코드 출처 검사. CRAG(Yan 외 2024)를 따른다.
+  - 재검색에서 이미 평가한 조각은 다시 보내지 않고, 앞 라운드의 조각도 모은다. 상한까지 `correct`가 없으면 `ambiguous` 조각으로 답하고, 쓸 조각이 없으면 "관련 문서에서 근거를 찾지 못했습니다"(`no_evidence`)로 끝난다.
+  - grader의 JSON을 못 읽으면 한 번 다시 묻고, 또 못 읽거나 호출이 실패하면 그 라운드의 조각을 모두 `ambiguous`로 본다. 결과의 고쳐 쓴 횟수는 재검색 횟수다.
+  - 논문과 다른 점: 평가기는 학습한 모델이 아니라 LLM이고, 재검색은 웹이 아니라 같은 색인이며, 조각 안의 문장 추리기는 하지 않는다.
+  - main과 비교(평가 3번): 문서에 없는 질문에 corrective-rag는 9/9 "찾지 못했다", main은 3/9(명령을 지어냄). 입력 토큰은 0.3~0.6배. 결정 표의 한 줄 같은 값은 둘 다 찾지 못했다(임베딩 검색의 한계).
 - 워크플로끼리는 서로 import하지 않는다. 경로 표(`ROUTES`), 메뉴(`MENU`), worker 목록(`WORKERS`, C16과 C18이 함께 씀)은 `workflows/common.py`에, 나머지 표는 각자 파일에 둔다. 공통 도구도 `workflows/common.py`에 있다: 에이전트 자리(`AgentSlot`), 자리로 에이전트 설정 만들기(`slot_config`), 가지 이름 붙이기(`branch_config`), 검색한 출처를 모으는 `search_docs`(`docs_tool`), Tool 결과 모으기(`keep_results`), 작성자 Tool 조립(`writer_tools`, C17, C19, C20. 가지면 승인 Tool을 뺌), 이름 정리(`clean_label`).
 - 진행 중에는 `▸ 답 작성`, `▸ 출처 검사: …`, `▸ 고쳐 쓰기 1/4`처럼 노드마다 한 줄씩 보이고, 그 아래 `· [main] 모델 호출 중 (스텝 1, …)`, `· [tool] search_docs`가 보인다. 끝나면 `▸ 워크플로 끝: 상태 (고쳐 쓴 횟수 n)`이다. 동시에 도는 가지의 모델 호출 줄은 섞여 나오고, 가지 이름(`[docs]`, `[web]`, `[judge1]`)과 이름마다 따로 센 스텝 번호가 붙는다.
 - 승인 메뉴는 `1) 승인`, `2) 거부`, `3) 다르게 요청(이유 입력)`이다. 엔터만 치면 승인 대기로 남는다. 승인 대기 상태는 `data/checkpoints.sqlite`에 저장되어 프로그램을 껐다 켜도 `/workflows`에 보이고 `/workflow-resume 번호`로 이어 간다.
@@ -203,7 +210,7 @@ uv run python scripts/trace_report.py          # 세션 목록(저장된 세션�
 uv run python scripts/trace_report.py steps    # 가장 최근 세션을 스텝 순서대로: 프롬프트, 모델 출력, Tool 결과, 워크플로 노드. steps 세션번호로 세션을 고른다
 ```
 
-- 평가 케이스는 `evals/cases.jsonl`에 있다(git에 올린다). 카테고리는 tool, docs, approval, clarify, skill, memory, workflow, safety, subagent, routing, sectioning, voting, orchestrator, evaluator, plan-execute, reflexion, debate, handoff다(69개). routing 케이스는 고른 경로(`expect_route`)를, sectioning 케이스는 고른 경로들(`expect_routes`, 순서 무관)을, voting 케이스는 판정(`expect_verdict`)을, orchestrator 케이스는 한 번 이상 쓴 worker(`expect_workers`, 순서와 개수 무관)를 본다. orchestrator 케이스는 같은 질문을 main으로도 돌려 delegate와 비교한다. plan-execute 케이스도 `expect_workers`(researcher, utility)를 보고, 같은 질문을 main으로도 돌린다. voting은 실행마다 `판정 (표 1, 표 2, 표 3)`을 결과 파일의 `verdicts`에 남겨 판정자 1번과 다수결의 흔들림을 비교한다. subagent 케이스는 맡겨야 하는지(`expect_delegate`)를 보고, 하위 에이전트가 부른 Tool도 판정에 센다. 평가는 웹 서버(`web`)를 연결하지 않는다. safety 케이스는 실제로 실행되면 안 되는 Tool(`forbid_executed`)과 평가 전용 문서 색인(`"knowledge": "fixtures"`)을 쓴다. 평가 전용 자료는 `evals/fixtures/`에 있고, 평가할 때 `data/sandbox/eval/`로 복사하고 `data/evals/index.sqlite`로 색인한다. workflow 케이스는 승인 단계의 답(`workflow_decisions`), 마지막 상태(`expect_status`), 고쳐 쓴 횟수 상한(`expect_max_revisions`)을 쓴다. memory 케이스는 앞선 턴(`setup_turns`), 마지막 질문 전 컴팩션(`compact_before`), 평가용 장기 메모리(`memory_items`)를 쓴다. reflexion 케이스는 실행마다 임시 파일에 새로 넣는 교훈(`reflections`)을 쓰고, 실제 `data/reflections.md`는 건드리지 않는다. 첫 시도 통과는 `expect_max_revisions: 0`으로 본다. debate 케이스는 질문마다 debate와 main 한 쌍이고 모두 LLM 판정을 붙인다. 워크플로가 아닌 케이스는 채팅과 같은 세션(handoff 켬)으로 돌아, `setup_turns`와 마지막 질문이 같은 세션에서 이어지고 Tool 판정은 마지막 턴에서 돈 모든 에이전트의 호출을 센다. handoff 케이스는 마지막 턴이 끝났을 때 대화 중인 에이전트(`expect_agent`)를 본다.
+- 평가 케이스는 `evals/cases.jsonl`에 있다(git에 올린다). 카테고리는 tool, docs, approval, clarify, skill, memory, workflow, safety, subagent, routing, sectioning, voting, orchestrator, evaluator, plan-execute, reflexion, debate, handoff, corrective-rag다(77개). routing 케이스는 고른 경로(`expect_route`)를, sectioning 케이스는 고른 경로들(`expect_routes`, 순서 무관)을, voting 케이스는 판정(`expect_verdict`)을, orchestrator 케이스는 한 번 이상 쓴 worker(`expect_workers`, 순서와 개수 무관)를 본다. orchestrator 케이스는 같은 질문을 main으로도 돌려 delegate와 비교한다. plan-execute 케이스도 `expect_workers`(researcher, utility)를 보고, 같은 질문을 main으로도 돌린다. voting은 실행마다 `판정 (표 1, 표 2, 표 3)`을 결과 파일의 `verdicts`에 남겨 판정자 1번과 다수결의 흔들림을 비교한다. subagent 케이스는 맡겨야 하는지(`expect_delegate`)를 보고, 하위 에이전트가 부른 Tool도 판정에 센다. 평가는 웹 서버(`web`)를 연결하지 않는다. safety 케이스는 실제로 실행되면 안 되는 Tool(`forbid_executed`)과 평가 전용 문서 색인(`"knowledge": "fixtures"`)을 쓴다. 평가 전용 자료는 `evals/fixtures/`에 있고, 평가할 때 `data/sandbox/eval/`로 복사하고 `data/evals/index.sqlite`로 색인한다. workflow 케이스는 승인 단계의 답(`workflow_decisions`), 마지막 상태(`expect_status`), 고쳐 쓴 횟수 상한(`expect_max_revisions`)을 쓴다. memory 케이스는 앞선 턴(`setup_turns`), 마지막 질문 전 컴팩션(`compact_before`), 평가용 장기 메모리(`memory_items`)를 쓴다. reflexion 케이스는 실행마다 임시 파일에 새로 넣는 교훈(`reflections`)을 쓰고, 실제 `data/reflections.md`는 건드리지 않는다. 첫 시도 통과는 `expect_max_revisions: 0`으로 본다. debate 케이스는 질문마다 debate와 main 한 쌍이고 모두 LLM 판정을 붙인다. 워크플로가 아닌 케이스는 채팅과 같은 세션(handoff 켬)으로 돌아, `setup_turns`와 마지막 질문이 같은 세션에서 이어지고 Tool 판정은 마지막 턴에서 돈 모든 에이전트의 호출을 센다. handoff 케이스는 마지막 턴이 끝났을 때 대화 중인 에이전트(`expect_agent`)를 본다. corrective-rag 케이스는 Notion 색인(`"knowledge": "notion"`, `data/notion.sqlite`)으로 돌고, 답의 출처 중 하나에 그 문서 이름이 있는지(`expect_source`, 예 `"C14"`)와 재검색 횟수 하한(`expect_min_revisions`)을 본다. 질문마다 main 짝(`-main`)이 있다. Notion 색인이 없으면 이 케이스들은 건너뛰지 않고 실패로 나온다. 워크플로 케이스도 케이스의 색인을 쓴다.
 - 판정은 규칙 기반이다. 기대한 Tool 호출, 금지 Tool, 답에 있어야 할 표현, 있으면 안 되는 표현, 출처 표기, 실행한 Tool의 오류를 본다. 목표는 100% 통과다. 워크플로 케이스는 최종 답과 상태만 보고, 가지 안의 Tool 호출과 오류는 아직 판정하지 않는다(C16에서 발견).
 - `"llm_judge": true`인 케이스(24개)는 evaluator-optimizer와 같은 평가자와 기준표로 실행마다 LLM 판정도 한다(C17). 결과 파일의 `llm_verdicts`에 `통과 3/4 (실패: 출처 - 이유)`처럼 남고, 요약 끝에 `LLM 판정: N케이스, 규칙 판정과 어긋남 M번 (id들)`이 나온다. 기록만 하고 통과/실패에는 넣지 않는다. 워크플로 케이스는 근거(Tool 결과)를 넘길 수 없어 근거에 맞음과 출처는 판정하지 않는다.
 - 결과는 `data/evals/실행번호.json`에 저장되고, 직전 실행에서 통과했는데 이번에 실패한 케이스를 회귀로 표시한다.
@@ -246,7 +253,7 @@ uv run python examples/chat.py             # 저장된 색인으로 검색하며
 - 임베딩은 OpenAI를 씁니다. 그래서 제공자를 Anthropic으로 골라도 `OPENAI_API_KEY`가 필요합니다.
 - 답의 출처는 `[문서 제목, 위치]` 형식으로 붙습니다. 첫 소제목 앞 내용은 위치가 `처음`입니다(C13). 검색 결과에 없는 출처는 `※` 경고로 표시합니다. 대조할 때 공백 수와 굵게 표시(`**`)는 무시하고, `[가, 1절; 나, 2절]`은 출처 둘로, 뒤에 `(URL)`이 붙은 웹 링크는 출처가 아닌 것으로 봅니다.
 - 관련 문서가 없으면 모른다고 답합니다. 유사도 시작값은 0.3(`DEFAULT_THRESHOLD`)입니다.
-- Notion 페이지를 문서로 쓰려면 `uv run python scripts/ingest_notion.py`로 "AI Agent Dock" 페이지와 그 아래 페이지를 `data/notion/`에 md로 받고 `data/notion.sqlite`로 색인한 뒤, `.env`에 `DOCS_INDEX=data/notion.sqlite`를 넣습니다(`NOTION_API_KEY` 필요). Mermaid는 꾸밈 줄만 빼고 남기고, 소제목의 굵게 표시는 뺍니다. 평가는 `data/index.sqlite`를 그대로 씁니다.
+- Notion 페이지를 문서로 쓰려면 `uv run python scripts/ingest_notion.py`로 "AI Agent Dock" 페이지와 그 아래 페이지를 `data/notion/`에 md로 받고 `data/notion.sqlite`로 색인한 뒤, `.env`에 `DOCS_INDEX=data/notion.sqlite`를 넣습니다(`NOTION_API_KEY` 필요). Mermaid는 꾸밈 줄만 빼고 남기고, 소제목의 굵게 표시는 뺍니다. 평가는 `data/index.sqlite`를 쓰고, corrective-rag 케이스만 `data/notion.sqlite`를 씁니다(다시 수집하면 검색 순위가 바뀌어 케이스 질문을 다시 맞춰야 할 수 있습니다).
 - `data/index.sqlite`는 문서에서 다시 만들 수 있으므로 git에서 제외합니다. 감사 로그는 `logs/audit.jsonl`에 쌓이며 `logs/`도 git에서 제외합니다.
 
 Python 3.12, 패키지 관리는 [uv](https://docs.astral.sh/uv/)를 쓴다.
@@ -277,7 +284,7 @@ Python 3.12, 패키지 관리는 [uv](https://docs.astral.sh/uv/)를 쓴다.
 - `src/ai_agent_dock/core/llm/`: 제공자 독립 LLM 호출(`call_llm`, 스트리밍은 `on_text_delta`)과 OpenAI·Anthropic 어댑터
 - `src/ai_agent_dock/core/runtime/`: Agent Loop(`run_agent`), 설정·결과 타입(`AgentConfig`, `AgentResult`). 시스템 프롬프트 조립은 `core/agents/system_prompt.py`
 - `src/ai_agent_dock/core/agents/`: 서브에이전트. `AGENT.md` 읽기와 Tool 패턴(`loader.py`), 시스템 프롬프트 조립(`system_prompt.py`), 에이전트 설정 만들기와 `delegate`, `handoff` Tool(`team.py`의 `AgentTeam.config_for`)
-- `agents/`: 에이전트 정의(`main`, `researcher`, routing 경로용 `router`, `web`, `chat`, C15의 `selector`, `aggregator`, `judge`, C16의 `orchestrator`, C17의 `evaluator`, C18의 `planner`, C19의 `reflector`, C20의 `debater`, C21 handoff용 `files`의 `AGENT.md`)
+- `agents/`: 에이전트 정의(`main`, `researcher`, routing 경로용 `router`, `web`, `chat`, C15의 `selector`, `aggregator`, `judge`, C16의 `orchestrator`, C17의 `evaluator`, C18의 `planner`, C19의 `reflector`, C20의 `debater`, C21 handoff용 `files`, C22의 `grader`의 `AGENT.md`)
 - `src/ai_agent_dock/core/hitl/`: 사람 개입. 승인 메뉴(`approval.py`), 되묻기 Tool(`clarify.py`), 감사 로그(`audit.py`)
 - `src/ai_agent_dock/core/evals/`: 평가. 케이스 읽기와 규칙 판정(`score.py`), 실행과 결과 저장, 회귀 표시, LLM 판정 기록(`run.py`), 기준표와 평가자 프롬프트, 평가자 답 읽기(`rubric.py`, evaluator-optimizer와 reflexion도 쓴다. 기준표는 인자로 바꿀 수 있다)
 - `src/ai_agent_dock/core/observability/`: 관측. 세션별 추적 기록(`trace.py`)과 추적 리포트 계산(`report.py`)
@@ -289,7 +296,7 @@ Python 3.12, 패키지 관리는 [uv](https://docs.astral.sh/uv/)를 쓴다.
 - `src/ai_agent_dock/core/session/`: 대화 세션(턴 사이에 이력을 이어 간다. 지금 에이전트와 넘기기, C21), 세션 저장(`store.py`, `data/sessions/`), 컴팩션(`compact.py`)
 - `src/ai_agent_dock/core/memory/`: 장기 메모리(`data/memory.md`). 같은 `MemoryStore`를 reflexion 교훈(`data/reflections.md`)에도 쓴다
 - `src/ai_agent_dock/core/orchestration/`: 워크플로 실행 기반(`WorkflowRunner`: 시작, 재개, 승인 대기 찾기, 추적 기록). 체크포인트 저장 방식은 밖에서 받는다(채팅은 SQLite, 테스트와 평가는 메모리)
-- `src/ai_agent_dock/workflows/`: 워크플로 정의(`answer_check.py`, `prompt_chaining.py`, `routing.py`, `sectioning.py`, `voting.py`, `orchestrator_workers.py`, `evaluator_optimizer.py`, `plan_and_execute.py`, `reflexion.py`, `debate.py`)와 공통 도구(`common.py`). 애플리케이션이 자기 그래프를 정의하는 방식의 첫 예. core는 이 폴더를 import하지 않고, 워크플로끼리도 서로 import하지 않는다
+- `src/ai_agent_dock/workflows/`: 워크플로 정의(`answer_check.py`, `prompt_chaining.py`, `routing.py`, `sectioning.py`, `voting.py`, `orchestrator_workers.py`, `evaluator_optimizer.py`, `plan_and_execute.py`, `reflexion.py`, `debate.py`, `corrective_rag.py`)와 공통 도구(`common.py`). 애플리케이션이 자기 그래프를 정의하는 방식의 첫 예. core는 이 폴더를 import하지 않고, 워크플로끼리도 서로 import하지 않는다
 - `src/ai_agent_dock/core/commands.py`: 슬래시 명령(이름, 사용법, 처리). 응용은 입력을 넘기고 결과를 보여 주기만 한다
 - `src/ai_agent_dock/core/skills/`: 스킬 로더. `skills/` 폴더의 `SKILL.md`를 읽고 머리말을 검사하며, 목록 문장과 `load_skill` Tool을 만든다
 - `src/ai_agent_dock/core/tools/`: 기본 제공 Tool(계산기, 현재 시각)과 `ToolRegistry`(이름 중복 방지, 인자 검증, 결과 길이 제한)

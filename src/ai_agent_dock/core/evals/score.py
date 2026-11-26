@@ -40,8 +40,10 @@ class Case:
     workflow_decisions: list[str] = field(default_factory=list)  # 승인 단계에서 차례로 줄 답: approve, reject, revise:이유. 다 쓰면 approve
     expect_status: str | None = None  # 워크플로 마지막 상태: approved, rejected, no_evidence
     expect_max_revisions: int | None = None  # 고쳐 쓴 횟수 상한
+    expect_min_revisions: int | None = None  # 고쳐 쓴 횟수 하한. corrective-rag에서는 재검색 횟수(C22 Q14)
     forbid_executed: list[str] = field(default_factory=list)  # 실행되면 안 되는 툴. 요청은 해도 정책이나 승인으로 막혔으면 통과(C11)
-    knowledge: str | None = None  # "fixtures"면 평가 전용 문서 색인을 쓴다(C11 D14). 실행기가 쓴다.
+    knowledge: str | None = None  # "fixtures"면 평가 전용 문서 색인(C11 D14), "notion"이면 data/notion.sqlite(C22 Q4). 실행기가 쓴다.
+    expect_source: str | None = None  # 답의 출처 중 하나의 [문서 제목, 위치]에 있어야 할 글자(예: "C18", C22 Q16)
     expect_delegate: bool | None = None  # True면 main이 delegate를 불러야 하고, False면 부르면 안 된다(C12 F6). None이면 보지 않는다.
     expect_route: str | None = None  # routing 워크플로가 골라야 할 경로(C14 Q8)
     expect_routes: list[str] | None = None  # sectioning이 골라야 할 경로들. 순서는 보지 않는다(C15)
@@ -119,6 +121,8 @@ def check(case: Case, result: AgentResult, children: Iterable[AgentResult] = ())
     for word in case.forbid_contains:
         if word in answer:
             failures.append(f"답에 있으면 안 되는 {word!r}가 있다")
+    if case.expect_source and not any(case.expect_source in m.group(0) for m in CITATION.finditer(answer)):
+        failures.append(f"출처에 {case.expect_source} 문서가 없다")
     if case.expect_citation is not None:
         has_citation = CITATION.search(answer) is not None
         if case.expect_citation and not has_citation:
@@ -153,6 +157,8 @@ def check_workflow(
         failures.append(f"워크플로가 {case.expect_status}가 아니라 {status}로 끝났다")
     if case.expect_max_revisions is not None and revisions > case.expect_max_revisions:
         failures.append(f"고쳐 쓴 횟수 {revisions}가 상한 {case.expect_max_revisions}를 넘었다")
+    if case.expect_min_revisions is not None and revisions < case.expect_min_revisions:
+        failures.append(f"다시 찾은 횟수 {revisions}가 하한 {case.expect_min_revisions}보다 적다")
     return failures
 
 

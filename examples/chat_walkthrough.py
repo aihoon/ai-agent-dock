@@ -238,7 +238,7 @@ def hitl_write_tool(tracer):
 def main():
     parser = argparse.ArgumentParser(description="여러 턴 대화의 단계별 출력 데모")
     parser.add_argument("questions", nargs="*", help="실제 모델에 차례로 보낼 질문들(생략하면 기본 두 질문)")
-    parser.add_argument("--scenario", choices=[*SCENARIOS, "workflow", "safety", "subagent", "chain", "routing", "sectioning", "voting", "orchestrator-workers", "evaluator-optimizer", "plan", "reflexion", "debate", "handoff"], help="모델 없이 시나리오 실행")
+    parser.add_argument("--scenario", choices=[*SCENARIOS, "workflow", "safety", "subagent", "chain", "routing", "sectioning", "voting", "orchestrator-workers", "evaluator-optimizer", "plan", "reflexion", "debate", "handoff", "corrective-rag"], help="모델 없이 시나리오 실행")
     parser.add_argument("--provider", help="LLM 제공자(openai, anthropic). 생략하면 .env의 LLM_PROVIDER")
     parser.add_argument("--max-steps", type=int, help="한 턴에서 모델을 호출하는 횟수 상한")
     parser.add_argument("--stream", action="store_true", help="스트리밍으로 받아 글자 조각이 도착하는 모습을 보여 준다")
@@ -266,6 +266,8 @@ def main():
         return walk_debate()
     if args.scenario == "handoff":
         return walk_handoff()
+    if args.scenario == "corrective-rag":
+        return walk_corrective_rag()
 
     if args.scenario:
         questions, model, scenario_steps = SCENARIOS[args.scenario]
@@ -661,6 +663,49 @@ def walk_parallel(name):
         print(f"  ▸ 상태: {outcome.status} (계획 고침 {outcome.revisions}번, 실행한 worker: {', '.join(outcome.workers or [])})\n\n  답:\n{outcome.answer}")
         return
     print(f"  ▸ 걸린 시간 {time.perf_counter() - started:.1f}초 (가지의 모델 호출은 1초씩. 차례로 돌았다면 그 합만큼 걸린다)\n  답:\n{outcome.answer}")
+
+
+def walk_corrective_rag():
+    """corrective-rag(C22)를 가짜 모델과 가짜 색인으로 돌린다. 첫 검색은 다른 장의 조각만 나와 grader가 correct 0으로 평가하고
+    검색어를 재작성한다 → 재검색에서 correct 조각이 나온다 → 고른 조각만 받아 답한다. 색인은 검색어마다 정해 둔 조각을 돌려준다."""
+    question = "plan-and-execute 워크플로는 실행을 최대 몇 번까지 해?"
+    rewrite = "plan-and-execute MAX_RUNS 실행 상한"
+    runs = Hit(cite="C18.  Plan-and-Execute, 세부 설계", section="세부 설계", text="실행은 모두 합쳐 8번(MAX_RUNS)까지다. 닿으면 limit으로 끝난다.", score=0.6)
+    hits = {
+        question: [
+            Hit(cite="C16.  Orchestrator-workers, 세부 설계", section="세부 설계", text="orchestrator는 작업을 2~5개로 나눈다.", score=0.5),
+            Hit(cite="C18.  Plan-and-Execute, 흐름", section="흐름", text="단계가 끝날 때마다 replan이 돈다.", score=0.5),
+            Hit(cite="C8.  Evals와 관측성, 실행", section="실행", text="평가를 반복 3회 실행했다.", score=0.4),
+        ],
+        rewrite: [Hit(cite="C18.  Plan-and-Execute, 흐름", section="흐름", text="단계가 끝날 때마다 replan이 돈다.", score=0.5), runs],
+    }
+
+    class Store:
+        def search(self, query, top_k=3):
+            found = hits.get(query, [])
+            print(f"    • 색인 검색: {query!r} (top_k {top_k}) → {len(found)}개")
+            return found
+
+    responses = scripted(
+        final(json.dumps({"grades": ["incorrect", "ambiguous", "incorrect"], "rewrite": rewrite}, ensure_ascii=False)),
+        final(json.dumps({"grades": ["correct"], "rewrite": ""}, ensure_ascii=False)),  # 이미 평가한 replan 조각은 다시 보내지 않는다
+        final(f"실행은 모두 합쳐 8번까지입니다 [{runs.cite}]."),
+    )
+
+    def llm(request, on_text_delta=None):
+        response = responses(request)
+        print(f"    • 모델 호출: {(request.system_prompt or '').splitlines()[0]}\n        - 입력: {clip(request.messages[0].content, 90)}\n        - 출력: {response.text}")
+        return response
+
+    team = AgentTeam(load_agents(Path(__file__).resolve().parent.parent / "agents"))
+    base = AgentConfig(llm_config=LLMConfig(provider="scenario", model="scenario", max_output_tokens=None), tools=BUILTIN_TOOLS, llm=llm)
+    context = WorkflowContext(
+        config=team.config_for(MAIN, base), knowledge=Knowledge(store=Store(), seen=set(), files=1, chunks=1), team=team, base=base,
+        progress=lambda message: print("  ▸ " + message),
+    )
+    banner(f"/workflow corrective-rag {question}")
+    outcome = WorkflowRunner(WORKFLOWS, context, InMemorySaver()).start("corrective-rag", question)
+    print(f"  ▸ 워크플로 끝: {outcome.status} (다시 찾은 횟수 {outcome.revisions})\n\n  답:\n{outcome.answer}")
 
 
 def walk_reflexion():

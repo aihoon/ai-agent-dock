@@ -53,8 +53,9 @@ WHO = {
     "당신은 질문에 답하기 위한 실행 계획을": "planner",  # C18
     "당신은 실패한 답을 보고": "reflector",  # C19
     "당신은 토론에 참여한 토론자다": "debater",  # C20
+    "당신은 검색된 조각의 관련성을": "grader",  # C22
 }
-NOT_BRANCHES = ("selector", "aggregator", "orchestrator", "evaluator", "planner", "reflector")  # 나누고 합치는 에이전트는 가지가 아니다.
+NOT_BRANCHES = ("selector", "aggregator", "orchestrator", "evaluator", "planner", "reflector", "grader")  # 나누고 합치는 에이전트는 가지가 아니다.
 
 
 class ByContent:
@@ -291,7 +292,7 @@ def test_evaluate_keeps_each_voting_run_for_the_stability_comparison():
 def test_workflows_do_not_import_each_other():  # 표는 따로, 도구만 workflows/common.py에서(Q20). C17에서 모든 워크플로로 넓혔다
     folder = Path(__file__).resolve().parent.parent / "src" / "ai_agent_dock" / "workflows"
     names = sorted(p.stem for p in folder.glob("*.py") if p.stem not in ("__init__", "common"))
-    assert len(names) == 10  # C20 debate
+    assert len(names) == 11  # C22 corrective-rag
     for name in names:
         text = (folder / f"{name}.py").read_text(encoding="utf-8")
         assert [o for o in names if o != name and f"from .{o} import" in text] == [], name

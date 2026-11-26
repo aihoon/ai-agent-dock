@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 from langgraph.checkpoint.memory import InMemorySaver
 
 from ai_agent_dock.core.agents import MAIN, AgentTeam, load_agents
-from ai_agent_dock.core.evals import evaluate, last_passed, load_cases, regressions, save_run, scripted_approver, scripted_input, summarize
+from ai_agent_dock.core.evals import CaseResult, evaluate, last_passed, load_cases, regressions, save_run, scripted_approver, scripted_input, summarize
 from ai_agent_dock.core.llm import LLMRequest, UserMessage, call_llm, config_from_env
 from ai_agent_dock.core.llm.tokens import request_tokens
 from ai_agent_dock.core.memory import MemoryStore
@@ -61,6 +61,8 @@ def test_cases_with_real_model(request, tmp_path):
     skills = scan_skills(ROOT / "skills")
     knowledge = open_knowledge(ROOT / "data" / "index.sqlite")
     fixture_knowledge = prepare_fixtures()
+    notion_knowledge = open_knowledge(ROOT / "data" / "notion.sqlite")  # C22 케이스(knowledge "notion")의 색인. scripts/ingest_notion.py가 만든다.
+    indexes = {"fixtures": fixture_knowledge, "notion": notion_knowledge}
     delegated = []  # 이번 실행에서 맡긴 하위 에이전트의 결과. 판정에 하위 에이전트의 Tool 호출도 센다(C12).
     team = AgentTeam(
         load_agents(ROOT / "agents"),
@@ -91,7 +93,7 @@ def test_cases_with_real_model(request, tmp_path):
         last = {}  # 마지막으로 만든 base. evaluate는 make_config(case) 바로 뒤에 workflows를 부른다.
 
         def make_config(case):
-            kb = fixture_knowledge if case.knowledge == "fixtures" else knowledge
+            kb = indexes.get(case.knowledge, knowledge)
             pool = build_pool(skills=skills, knowledge=kb, mcp_tools=mcp_tools, input_fn=scripted_input(case.user_inputs))  # 채팅과 같은 pool(C17 Q21)
             config = AgentConfig(
                 llm_config=llm_config,
@@ -100,7 +102,7 @@ def test_cases_with_real_model(request, tmp_path):
                 tracer=tracer,
             )
             base = with_safety(config, policy=policy)[0]  # 채팅과 같은 Safety(C11 D17)
-            last["base"], last["case"] = base, case  # routing 케이스가 경로마다 에이전트를 만들 때(C14), reflexion 케이스가 교훈을 꺼낼 때(C19) 쓴다.
+            last["base"], last["case"], last["kb"] = base, case, kb  # routing 케이스가 경로마다 에이전트를 만들 때(C14), reflexion 케이스가 교훈을 꺼낼 때(C19) 쓴다.
             return team.config_for(MAIN, base, skills=skills, memory=case.memory_items)  # 채팅과 같은 main(C12)
 
         first = make_config(cases[0])
@@ -123,7 +125,7 @@ def test_cases_with_real_model(request, tmp_path):
             for text in last["case"].reflections:
                 reflections.add(text)
             context = WorkflowContext(
-                config=config, knowledge=knowledge, max_revisions=env_int("WORKFLOW_MAX_REVISIONS", 4), team=team, base=last["base"], reflections=reflections
+                config=config, knowledge=last["kb"], max_revisions=env_int("WORKFLOW_MAX_REVISIONS", 4), team=team, base=last["base"], reflections=reflections
             )
             return WorkflowRunner(WORKFLOWS, context, InMemorySaver())
 
@@ -136,10 +138,12 @@ def test_cases_with_real_model(request, tmp_path):
         def judge(prompt):  # llm_judge 케이스의 LLM 판정(C17). 기록만 하고 통과/실패에는 넣지 않는다.
             return ask_agent(team.config_for(EVALUATOR, last["base"]), prompt)
 
-        results = [
-            evaluate(case, make_config, repeat, compactor=compactor, workflows=workflows, delegated=take_delegated, judge=judge, session=session)
-            for case in cases
-        ]
+        def run_case(case):
+            if case.knowledge == "notion" and notion_knowledge is None:  # 건너뛰지 않고 실패로 남긴다(C22 4.6절)
+                return CaseResult(id=case.id, category=case.category, runs=repeat, passes=0, failures=["Notion 색인이 없다(uv run python scripts/ingest_notion.py)"])
+            return evaluate(case, make_config, repeat, compactor=compactor, workflows=workflows, delegated=take_delegated, judge=judge, session=session)
+
+        results = [run_case(case) for case in cases]
 
     results_dir = ROOT / "data" / "evals"
     previous = last_passed(results_dir)  # 저장하기 전에 직전 실행을 읽는다.

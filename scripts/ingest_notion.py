@@ -3,7 +3,7 @@
 사용법: uv run python scripts/ingest_notion.py
 실행할 때마다 전부 새로 만든다(고친 페이지, 새 페이지, 지운 페이지가 모두 반영된다). 받기가 끝난 뒤에 이전 결과를 지운다.
 .env의 NOTION_API_KEY(읽기 전용 connection의 API token)와 OPENAI_API_KEY(임베딩)가 필요하다.
-채팅에서 쓰려면 .env에 DOCS_INDEX=data/notion.sqlite를 넣는다. 평가는 data/index.sqlite를 그대로 쓴다.
+채팅에서 쓰려면 .env에 DOCS_INDEX=data/notion.sqlite를 넣는다. 평가는 data/index.sqlite를 쓰고, corrective-rag 케이스(C22, knowledge "notion")만 이 색인을 쓴다.
 """
 
 from __future__ import annotations
