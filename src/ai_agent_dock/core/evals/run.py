@@ -37,6 +37,8 @@ class CaseResult:
     input_tokens: float = 0
     output_tokens: float = 0
     seconds: float = 0
+    shape: str | None = None  # 케이스의 질문 모양과 난이도(C90). 비교표가 케이스 파일 없이 읽는다.
+    level: str | None = None
 
     @property
     def passed(self) -> bool:
@@ -87,7 +89,7 @@ def evaluate(
     """
     take = delegated or (lambda: [])
     collect = finished or (lambda: [])
-    outcome = CaseResult(id=case.id, category=case.category, runs=repeat, passes=0)
+    outcome = CaseResult(id=case.id, category=case.category, runs=repeat, passes=0, shape=case.shape, level=case.level)
     spent = [0, 0, 0, 0.0]  # LLM 호출, 입력 토큰, 출력 토큰, 초
 
     def spend(done: list[AgentResult], seconds: float) -> None:

@@ -52,6 +52,8 @@ class Case:
     expect_workers: list[str] | None = None  # orchestrator-workers가 한 번 이상 써야 할 worker. 순서, 개수, 다른 worker는 보지 않는다(C16 Q17)
     expect_agent: str | None = None  # 마지막 턴이 끝났을 때 대화 중인 에이전트(C21 Q16). None이면 보지 않는다
     reflections: list[str] = field(default_factory=list)  # reflexion 케이스가 실행마다 새로 시작하는 교훈(실제 data/reflections.md는 건드리지 않는다, C19 Q19)
+    shape: str | None = None  # compare 케이스의 질문 모양(simple, noevidence …). 비교표가 이것으로 묶는다(C90 Q4)
+    level: str | None = None  # compare 케이스의 난이도: easy, medium, hard(C90 Q11)
 
 
 def load_cases(path: Path) -> list[Case]:

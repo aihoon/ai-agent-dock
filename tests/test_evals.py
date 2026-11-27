@@ -111,10 +111,29 @@ def test_regression_is_a_case_that_passed_before_and_fails_now():
 def test_case_file_covers_every_category_and_builtin_tool():
     cases = load_cases(CASES)
     assert len({c.id for c in cases}) == len(cases)  # id는 겹치지 않는다
-    assert {c.category for c in cases} == {"tool", "docs", "approval", "clarify", "skill", "memory", "workflow", "safety", "subagent", "routing", "sectioning", "voting", "orchestrator", "evaluator", "plan-execute", "reflexion", "debate", "handoff", "corrective-rag"}
+    assert {c.category for c in cases} == {"tool", "docs", "approval", "clarify", "skill", "memory", "workflow", "safety", "subagent", "routing", "sectioning", "voting", "orchestrator", "evaluator", "plan-execute", "reflexion", "debate", "handoff", "corrective-rag", "compare"}
     expected = {name for c in cases for name in c.expect_tools}
     builtin = {t.name for t in BUILTIN_TOOLS} | {"ask_user", "search_docs", "load_skill"}
     assert builtin <= expected  # 빌트인 Tool마다 최소 한 케이스
+
+
+def test_compare_cases_share_rules_per_question_and_name_their_runner():
+    """C90: 한 질문의 케이스는 판정 규칙이 같고, id의 실행 방법이 workflow와 맞고, 모양마다 난이도 셋이다."""
+    compare = [c for c in load_cases(CASES) if c.category == "compare"]
+    rules = ("expect_contains", "expect_any", "forbid_contains", "forbid_tools", "expect_citation", "expect_source", "knowledge", "llm_judge", "level")
+    by_question = {}
+    for c in compare:
+        _, shape, number, runner = c.id.split("-", 3)
+        assert shape == c.shape and runner == (c.workflow or "main")
+        assert not (c.expect_tools or c.expect_status or c.expect_route)  # 워크플로만의 칸은 쓰지 않는다(4.3절)
+        by_question.setdefault((shape, number), []).append(c)
+    for group in by_question.values():
+        assert len({tuple(str(getattr(c, r)) for r in rules) + (c.question,) for c in group}) == 1
+        assert "main" in {c.workflow or "main" for c in group}
+    levels = {}
+    for shape, _ in by_question:
+        levels.setdefault(shape, set()).add(by_question[(shape, _)][0].level)
+    assert levels == {s: {"easy", "medium", "hard"} for s in levels} and len(levels) == 6
 
 
 # --- 미리 적은 답 ---
