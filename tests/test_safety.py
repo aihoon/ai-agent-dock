@@ -198,3 +198,10 @@ def test_text_sent_with_tool_calls_is_filtered_like_the_answer():  # 중간 설�
 def test_runtime_does_not_import_safety():  # runtime은 SafetyChecks 모양만 안다(C11 D19)
     for path in (SRC / "core" / "runtime").rglob("*.py"):
         assert not re.search(r"^\s*from \.\.safety|safety import", path.read_text(encoding="utf-8"), re.M), path
+
+
+def test_ask_rule_without_paths_does_not_check_paths_and_paths_must_be_a_list(tmp_path):  # C90 리뷰 B1, B6
+    write, _ = tool("write")
+    assert policy_file(tmp_path, {"write": "ask"}).check(ToolCall("1", "write", {"path": "a.md"}), write) is None  # 승인만 받고 막지 않는다
+    with pytest.raises(ValueError, match="paths"):
+        policy_file(tmp_path, {"write": {"mode": "ask", "paths": "*.md"}})  # 문자열이면 '*'로 쪼개져 제한이 풀린다

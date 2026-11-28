@@ -20,7 +20,7 @@ from ..core.agents import MAIN
 from ..core.orchestration import Workflow, WorkflowContext, ask_agent
 from ..core.retrieval import check_citations
 from ..core.tools import Node, tools_for
-from .common import AgentSlot, branch_config, clean_label, slot_config
+from .common import LEADING, AgentSlot, branch_config, clean_label, slot_config
 
 SELECTOR = "selector"
 AGGREGATOR = "aggregator"
@@ -58,7 +58,7 @@ def read_sections(label: str, question: str) -> list[tuple[str, str]]:
     chosen: dict[str, str] = {}
     for line in label.splitlines():
         name, _, sub = line.partition(":")
-        name = clean_label(name)
+        name = clean_label(LEADING.sub("", name))  # "- docs", "1. docs"처럼 메뉴 모양을 따라 써도 읽는다
         if name in names and name not in chosen:
             chosen[name] = sub.strip() or question  # 질문을 비우면 원래 질문을 넘긴다.
     return list(chosen.items())[:MAX_ROUTES]

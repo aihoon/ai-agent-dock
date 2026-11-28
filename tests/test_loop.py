@@ -124,3 +124,9 @@ def test_max_steps_comes_from_env_when_not_passed(monkeypatch):
 
     assert from_env.steps == 2
     assert explicit.steps == 4
+
+
+def test_empty_response_is_not_kept_in_history():  # C90 리뷰 B3: 빈 assistant 메시지는 Anthropic이 받지 않는다
+    config = AgentConfig(llm_config=TEST_CONFIG, tools=[], llm=FakeLLM([LLMResponse(text=None)]))
+    result = run_agent(config, "질문")
+    assert result.status == "completed" and len(result.history) == 1  # 질문만 남는다

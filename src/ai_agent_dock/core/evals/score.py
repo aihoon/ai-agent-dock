@@ -160,7 +160,7 @@ def check_workflow(
     if case.expect_max_revisions is not None and revisions > case.expect_max_revisions:
         failures.append(f"고쳐 쓴 횟수 {revisions}가 상한 {case.expect_max_revisions}를 넘었다")
     if case.expect_min_revisions is not None and revisions < case.expect_min_revisions:
-        failures.append(f"다시 찾은 횟수 {revisions}가 하한 {case.expect_min_revisions}보다 적다")
+        failures.append(f"횟수 {revisions}가 하한 {case.expect_min_revisions}보다 적다")
     return failures
 
 

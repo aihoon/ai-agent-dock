@@ -13,7 +13,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from functools import partial
 
-from ..llm import AssistantMessage, Message, UserMessage
+from ..llm import AssistantMessage, Message, ToolMessage, UserMessage
 from ..runtime.loop import run_agent
 from ..llm import LLMRequest
 from ..llm.tokens import request_tokens
@@ -35,10 +35,21 @@ def handoff_note(source: str, target: str, reason: str, *, last: bool) -> str:
     return note + (" 이번 턴에는 더 넘기지 말고 직접 답한다." if last else "")
 
 
+def drop_raw(history: list[Message]) -> list[Message]:
+    """제공자 원본 항목(raw)을 뗀다. 다른 제공자의 에이전트에게 넘길 때 그 항목을 보내면 API가 받지 않는다(C90 리뷰 A1, SessionStore.load와 같은 처리)."""
+    return [replace(m, raw=[]) if isinstance(m, AssistantMessage) and m.raw else m for m in history]
+
+
 def read_handoff(history: list[Message]) -> tuple[str, str] | None:
-    """마지막 모델 응답의 handoff 호출에서 (넘길 에이전트, 이유). 없으면 None."""
-    last = next((m for m in reversed(history) if isinstance(m, AssistantMessage)), None)
-    call = next((c for c in reversed(last.tool_calls) if c.name == HANDOFF), None) if last else None
+    """마지막 모델 응답의 성공한 handoff 호출에서 (넘길 에이전트, 이유). 없으면 None.
+
+    한 응답에 handoff가 둘이고 하나가 실패(없는 이름)했으면 성공한 것을 고른다(C90 리뷰 A2).
+    """
+    at = next((i for i in range(len(history) - 1, -1, -1) if isinstance(history[i], AssistantMessage)), None)
+    if at is None:
+        return None
+    failed = {m.tool_call_id for m in history[at + 1 :] if isinstance(m, ToolMessage) and m.is_error}
+    call = next((c for c in reversed(history[at].tool_calls) if c.name == HANDOFF and c.id not in failed), None)
     return (str(call.arguments.get("agent", "")), str(call.arguments.get("reason", ""))) if call else None
 
 
@@ -100,13 +111,14 @@ class Session:
             if self.on_handoff:
                 self.on_handoff(agent, to, reason)
             agent = to
-            config = self.agents(to)
+            provider, config = config.llm_config.provider, self.agents(to)
+            history = result.history if config.llm_config.provider == provider else drop_raw(result.history)
             if handoffs >= MAX_HANDOFFS:  # 더 넘기지 못하게 handoff Tool을 빼고 이 에이전트가 답한다(Q11).
                 config = replace(config, tools=[t for t in config.tools if t.name != HANDOFF])
             if on_text_delta is not None:
                 config = replace(config, llm=partial(config.llm, on_text_delta=on_text_delta))
             note = handoff_note(source, to, reason, last=handoffs >= MAX_HANDOFFS)
-            result = run_agent(self._traced(config, agent, first=False), note, history=result.history)
+            result = run_agent(self._traced(config, agent, first=False), note, history=history)
             usage.add(result.usage)
         # 예외가 나면 이 줄에 도달하지 않으므로 실패한 턴은 이력에 남지 않는다(넘기기 중이어도 지금 에이전트는 바뀌지 않는다).
         # max_steps로 끝난 턴도 모든 Tool 요청에 결과가 붙어 있어 이력이 일관되므로 그대로 유지한다.
@@ -121,7 +133,9 @@ class Session:
         """지금 에이전트를 바꾼다(넘기기, /agent). 이력은 그대로 둔다."""
         if self.agents is None:
             raise ValueError("이 세션은 에이전트를 바꿀 수 없다")
-        self.config = self.agents(agent)
+        provider, self.config = self.config.llm_config.provider, self.agents(agent)
+        if self.config.llm_config.provider != provider:
+            self.history = drop_raw(self.history)
         self.agent = agent
 
     def refresh(self) -> None:

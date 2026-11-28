@@ -20,13 +20,12 @@ from ..core.agents import MAIN
 from ..core.orchestration import Workflow, WorkflowContext, ask_agent
 from ..core.retrieval import check_citations
 from ..core.tools import Node, tools_for
-from .common import FALLBACK, MAX_TASKS, ONLY_MINE, WORKERS, branch_config, branch_name, clean_label, slot_config
+from .common import FALLBACK, LEADING, MAX_TASKS, ONLY_MINE, WORKERS, branch_config, branch_name, clean_label, slot_config
 
 NAME = "orchestrator-workers"
 ORCHESTRATOR = "orchestrator"
 AGGREGATOR = "aggregator"
 FORMAT = "질문에 맞는 형식으로 합친다. 질문이 보고서를 원하면 제목, 요약(3~5줄), 작업마다 절 하나로 쓴다."
-LEADING = re.compile(r"^\s*(?:[-*•]|\d+[.)])?\s*")  # 줄 앞의 목록 기호와 번호
 WORD = re.compile(r"[a-z_]+")
 
 

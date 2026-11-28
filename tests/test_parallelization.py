@@ -317,3 +317,7 @@ def test_branches_show_route_and_ballot_names_to_the_app():  # call message에 [
     names.clear()
     runner.start("voting", "글")
     assert sorted(names) == ["judge1", "judge2", "judge3"]
+
+
+def test_read_sections_skips_list_marks_and_bold():  # C90 리뷰 B8
+    assert read_sections("- docs: Skill 설명은?\n2. **files**: 목록", "원래") == [("docs", "Skill 설명은?"), ("files", "목록")]

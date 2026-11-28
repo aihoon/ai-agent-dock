@@ -127,3 +127,8 @@ def test_summary_shows_llm_judge_disagreements():
     ]
     assert summarize(results, set()).splitlines()[-1] == "LLM 판정: 2케이스, 규칙 판정과 어긋남 1번 (a)"
     assert "LLM 판정" not in summarize(results[2:], set())
+
+
+def test_read_verdicts_reads_bold_names_and_results():  # C90 리뷰 B7
+    verdicts = read_verdicts("- **질문에 답함**: **통과** - 답했다\n**근거에 맞음**: 실패 - 없다")
+    assert [v.result for v in verdicts[:2]] == [PASS, FAIL] and verdicts[0].reason == "답했다"

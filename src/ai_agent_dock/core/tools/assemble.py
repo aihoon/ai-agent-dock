@@ -138,5 +138,6 @@ def tools_for(
     tools = [t for t in tools if t.name not in NO_ASKING and (not node.branch or (t.read_only and t.trusted))]
     if node.web:
         names = {t.name for t in tools}
-        tools += [t for t in select_tools(node.web, pool) if t.name.startswith(WEB) and t.name not in names]
+        safe = lambda t: not node.branch or (t.read_only and t.trusted)  # 동시 가지는 웹 Tool도 승인이 필요 없는 것만(C90 리뷰 A4)
+        tools += [t for t in select_tools(node.web, pool) if t.name.startswith(WEB) and t.name not in names and safe(t)]
     return tools

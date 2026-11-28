@@ -4,13 +4,15 @@
 가짜 모델은 에이전트 이름(wrap_llm)으로 응답을 고른다(test_debate의 ByName).
 """
 
+from dataclasses import replace
+
 from fakes import TEST_CONFIG, final, tool_call
 from test_debate import ByName
 from test_parallelization import AGENTS, POOL, tool
 
 from ai_agent_dock.core.agents import MAIN, AgentTeam, load_agents
 from ai_agent_dock.core.commands import CommandContext, find_command
-from ai_agent_dock.core.llm import AssistantMessage, UserMessage
+from ai_agent_dock.core.llm import AssistantMessage, LLMResponse, ToolCall, UserMessage
 from ai_agent_dock.core.memory import MemoryStore
 from ai_agent_dock.core.observability import Tracer
 from ai_agent_dock.core.runtime.types import AgentConfig
@@ -145,3 +147,35 @@ def test_evaluate_runs_setup_turns_in_one_session_and_checks_the_agent():
     session, _, _, _ = make({MAIN: [final("2")]})
     result = evaluate(Case(id="y", category="handoff", question="1+1", expect_agent="files"), lambda c: session.config, session=lambda config: session)
     assert result.failures == ["대화 에이전트: 기대 files, 실제 main"]
+
+
+def test_a_failed_second_handoff_does_not_pick_the_failed_target():  # C90 리뷰 A2
+    two = LLMResponse(text=None, tool_calls=[ToolCall("h1", "handoff", {"agent": "files", "reason": "파일"}), ToolCall("h2", "handoff", {"agent": "filez", "reason": "x"})])
+    session, _, moves, _ = make({MAIN: [two], "files": [final("파일 답")]})
+    assert (session.ask("파일 정리").answer, session.agent, moves) == ("파일 답", "files", [(MAIN, "files", "파일")])
+
+
+def test_provider_change_drops_raw_items():  # C90 리뷰 A1: 다른 제공자의 원본 항목을 보내지 않는다
+    session, fake, _, team = make({MAIN: [final("안녕")], "files": [final("파일 답")]})
+    other = replace(TEST_CONFIG, provider="other")
+    session.agents = lambda name: replace(team.config_for(name, session.config), llm_config=other) if name == "files" else session.config
+    session.history = [UserMessage(content="q"), AssistantMessage(content="a", raw=["openai-item"])]
+    session.switch("files")
+    assert session.history[-1].raw == [] and session.history[-1].content == "a"
+
+
+def test_tools_command_lists_the_handoff_tool(tmp_path):  # C90 리뷰 B2: /tools가 KeyError로 채팅을 끄지 않는다
+    session, _, _, team = make({MAIN: [final("안녕")]})
+    ctx = CommandContext(
+        session=session, registry=ToolRegistry(), skills=[], store=SessionStore(tmp_path), memory=MemoryStore(tmp_path / "m.md"),
+        make_prompt=lambda: "", summarize=lambda t: "", agents=team,
+    )
+    command, arg = find_command("/tools")
+
+    def source_of(name):  # 레지스트리는 handoff를 모른다(config_for가 붙인다)
+        if name == "handoff":
+            raise KeyError(name)
+        return "builtin"
+
+    ctx.registry.source_of = source_of
+    assert "handoff" in command.run(ctx, arg)

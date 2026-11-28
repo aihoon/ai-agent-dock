@@ -89,3 +89,9 @@ def test_tools_for_node_rules_drop_asking_and_delegating_keep_branches_safe_and_
     web = ("web__tavily_search", "get_current_time")  # web 에이전트의 tools: 웹 Tool만 더한다(Q26)
     assert names(tools_for(pool, patterns=main, node=Node(web=web)))[-1] == "web__tavily_search"
     assert "web__tavily_research" not in names(tools_for(pool, patterns=main, node=Node(web=web)))
+
+
+def test_branch_nodes_get_only_safe_web_tools():  # C90 리뷰 A4: 동시 가지는 승인이 필요 없는 Tool만
+    pool = [*POOL[:-1], tool("web__tavily_search", trusted=False)]
+    assert "web__tavily_search" not in names(tools_for(pool, patterns=["*", "!web__*"], node=Node(branch=True, web=("web__tavily_search",))))
+    assert "web__tavily_search" in names(tools_for(pool, patterns=["*", "!web__*"], node=Node(web=("web__tavily_search",))))

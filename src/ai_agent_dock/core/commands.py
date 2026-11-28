@@ -27,7 +27,7 @@ from .session import Session
 from .session.compact import compact
 from .session.store import SessionRecord, SessionStore, auto_name
 from .skills import SkillMeta, read_skill
-from .tools import ToolRegistry
+from .tools import HANDOFF, ToolRegistry
 
 SHOW = 80  # /history에서 한 항목을 이만큼만 보여 준다.
 
@@ -153,7 +153,7 @@ def _history(ctx: CommandContext, arg: str) -> str:
 
 def _tools(ctx: CommandContext, arg: str) -> str:
     tools = ctx.session.config.tools
-    source = lambda t: "agents" if t.name == DELEGATE else ctx.registry.source_of(t.name)  # delegate는 레지스트리가 아니라 에이전트가 만든다.
+    source = lambda t: "agents" if t.name in (DELEGATE, HANDOFF) else ctx.registry.source_of(t.name)  # delegate와 handoff는 레지스트리가 아니라 에이전트가 만든다.
     return "\n".join([f"(Tool {len(tools)}개, *는 필수 인자)", *(f"  {describe_tool(t, source(t))}" for t in tools)])
 
 

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, replace
 
 from ..core.agents import MAIN
@@ -82,9 +83,12 @@ def writer_tools(ctx: WorkflowContext, evidence: list[tuple[str, str]], seen: se
     return keep_results(tools, evidence)
 
 
+LEADING = re.compile(r"^\s*(?:[-*•]|\d+[.)])?\s*")  # 줄 앞의 목록 기호와 번호(C16, C90 리뷰 B8)
+
+
 def clean_label(label: str) -> str:
-    """에이전트가 낸 이름 하나를 정리한다. 대소문자, 앞뒤 공백, 따옴표, 마침표만 정리한다(C14 Q4)."""
-    return label.strip(" \t\n\"'`.").lower()
+    """에이전트가 낸 이름 하나를 정리한다. 대소문자, 앞뒤 공백, 따옴표, 마침표, 굵게(*)만 정리한다(C14 Q4)."""
+    return label.strip(" \t\n\"'`.*").lower()
 
 
 # --- worker 목록과 가지 이름. orchestrator-workers(C16)와 plan-and-execute(C18)가 함께 쓴다(C18 Q13, Q27). ---

@@ -81,7 +81,7 @@ def run_agent(config: AgentConfig, question: str, *, history: list[Message] | No
         # 마지막 스텝의 Tool 요청은 실행하지 않는다. 결과를 볼 호출이 없고, 짝 없는 요청을 이력에 두면 다음 호출이 실패한다.
         tool_calls = [] if last else response.tool_calls
         raw = response.raw if answer == response.text and tool_calls == response.tool_calls else []
-        if answer or not last:
+        if answer or tool_calls:  # 글도 Tool 요청도 없는 빈 응답은 넣지 않는다. Anthropic은 빈 assistant 메시지를 받지 않는다(C90 리뷰 B3).
             history.append(AssistantMessage(content=answer, tool_calls=tool_calls, raw=raw))
 
         if last:

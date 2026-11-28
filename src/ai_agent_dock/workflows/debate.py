@@ -51,7 +51,9 @@ def read_conclusion(text: str) -> str:
 
 def normalize(conclusion: str) -> str:
     """비교할 글자: 굵게, 따옴표, 문장 부호, 숫자의 쉼표, 공백을 떼고, 끝의 "입니다/이다/다"를 하나 뗀 뒤 소문자(4.3절)."""
-    text = re.sub(r"[\W_]+", "", conclusion).lower()
+    # 숫자의 부호(-3), 소수점(3.5), 분수(1/2)는 남긴다. 지우면 다른 값을 같다고 본다(C90 리뷰 A3).
+    text = re.sub(r"(?<=\d),(?=\d)", "", conclusion)
+    text = re.sub(r"(?!-(?=\d)|(?<=\d)[./](?=\d))[\W_]", "", text).lower()
     for ending in ENDINGS:
         if text.endswith(ending) and len(text) > len(ending):
             return text[: -len(ending)]

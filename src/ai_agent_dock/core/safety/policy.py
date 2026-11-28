@@ -42,7 +42,7 @@ class SafetyPolicy:
             return None
         if rule.mode == "deny":
             return f"정책이 {call.name}을 막았다."
-        for value in _path_values(call):
+        for value in _path_values(call) if rule.paths else []:  # paths가 비면 경로를 보지 않고 승인만 받는다(C90 리뷰 B1)
             if not any(fnmatch(value, pattern) for pattern in rule.paths):
                 return f"경로 {value}는 허용된 패턴({', '.join(rule.paths)})에 맞지 않는다."
         return None
@@ -60,7 +60,10 @@ def load_safety_policy(path: str | Path) -> SafetyPolicy:
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     rules = {}
     for name, raw in data.get("tools", {}).items():
-        rule = Rule(mode=raw) if isinstance(raw, str) else Rule(mode=raw.get("mode", "ask"), paths=list(raw.get("paths", [])))
+        paths = [] if isinstance(raw, str) else raw.get("paths", [])
+        if not isinstance(paths, list) or not all(isinstance(p, str) for p in paths):  # 문자열이면 글자로 쪼개져 '*'가 모든 경로를 허용한다(C90 리뷰 B6)
+            raise ValueError(f"{name}: paths는 문자열 목록입니다: {paths!r}")
+        rule = Rule(mode=raw) if isinstance(raw, str) else Rule(mode=raw.get("mode", "ask"), paths=paths)
         if rule.mode not in MODES:
             raise ValueError(f"{name}: mode는 {', '.join(MODES)} 중 하나입니다(정책은 더 엄격하게만 바꿀 수 있습니다): {rule.mode}")
         rules[name] = rule

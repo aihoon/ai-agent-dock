@@ -140,3 +140,9 @@ def test_read_conclusion_and_normalize():
     assert normalize("아니요.") == normalize("**아니요**") == "아니요"
     assert without_review(f"결론: 예\n근거\n{REVIEW}\n지적") == "결론: 예\n근거" and without_review("결론: 예") == "결론: 예"
     assert normalize("50원") != normalize("공은 50원이다")  # 같은 뜻을 다르다고 볼 수는 있다(4.3절)
+
+
+def test_normalize_keeps_signs_decimals_and_fractions():  # C90 리뷰 A3: 다른 뜻을 같다고 보지 않는다
+    assert normalize("-3") != normalize("3")
+    assert normalize("3.5") != normalize("35") and normalize("1/2") != normalize("12")
+    assert normalize("**3.5**입니다.") == normalize("3.5") and normalize("1,027") == "1027"

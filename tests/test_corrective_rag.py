@@ -160,5 +160,5 @@ def test_expect_source_and_min_revisions():
     assert check(case, answer(CITED)) == []
     assert check(case, answer("8번 [C16.  Orchestrator-workers, 세부 설계]")) == ["출처에 C18 문서가 없다"]
     assert check(case, answer("8번")) == ["출처에 C18 문서가 없다"]
-    assert check_workflow(case, "completed", 0) == ["다시 찾은 횟수 0가 하한 1보다 적다"]
+    assert check_workflow(case, "completed", 0) == ["횟수 0가 하한 1보다 적다"]  # 모든 워크플로가 쓰는 칸이라 이름을 붙이지 않는다(C90 리뷰 A9)
     assert check_workflow(case, "completed", 1) == []

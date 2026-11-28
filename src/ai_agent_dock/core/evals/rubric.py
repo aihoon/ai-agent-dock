@@ -71,10 +71,11 @@ def read_verdicts(label: str, rubric: list[Criterion] = RUBRIC) -> list[Verdict]
     names = {c.name for c in rubric}
     for line in label.splitlines():
         name, colon, rest = LEADING.sub("", line).partition(":")
-        name = name.strip()
+        name = name.strip(" *")  # 굵게 쓴 이름(**질문에 답함**)도 읽는다(C90 리뷰 B7)
         if not colon or name not in names or name in found:
             continue
-        head, _, reason = rest.strip().partition(" - ")
+        head, _, reason = rest.strip(" *").partition(" - ")
+        head = head.strip(" *")
         result = PASS if head.startswith(PASS) else SKIP if head.startswith("판정") else FAIL
         found[name] = Verdict(name, result, reason.strip())
     return [found.get(c.name, Verdict(c.name, FAIL, MISSING)) for c in rubric]
