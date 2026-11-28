@@ -18,7 +18,7 @@ from ..core.evals.rubric import EVALUATOR, FAIL, LEADING, RUBRIC, Criterion, Ver
 from ..core.memory import MemoryStore
 from ..core.orchestration import Workflow, WorkflowContext, ask_agent
 from ..core.safety import wrap_untrusted
-from .common import writer_tools
+from .common import missing_agents, writer_tools
 
 NAME = "reflexion"
 REFLECTOR = "reflector"
@@ -162,11 +162,9 @@ def verdicts_of(state: State) -> list[Verdict]:
 
 
 def unavailable(ctx: WorkflowContext) -> str | None:
-    if ctx.team is None or ctx.base is None:
-        return f"에이전트 정의가 없어 {NAME}를 쓸 수 없습니다."
-    missing = [name for name in (EVALUATOR, REFLECTOR) if name not in ctx.team.agents]
-    if missing:
-        return f"{NAME}에 필요한 에이전트 정의가 없습니다: {', '.join(missing)} (agents/이름/AGENT.md)"
+    reason = missing_agents(ctx, NAME, {EVALUATOR, REFLECTOR})
+    if reason:
+        return reason
     if ctx.reflections is None:
         return f"교훈 저장소가 없어 {NAME}를 쓸 수 없습니다."
     return None

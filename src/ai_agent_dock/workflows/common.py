@@ -83,6 +83,20 @@ def writer_tools(ctx: WorkflowContext, evidence: list[tuple[str, str]], seen: se
     return keep_results(tools, evidence)
 
 
+def missing_agents(ctx: WorkflowContext, name: str, needed) -> str | None:
+    """에이전트 정의가 없거나 필요한 에이전트가 빠졌으면 이유. 워크플로의 unavailable이 함께 쓴다(C90 ponytail-audit P1)."""
+    if ctx.team is None or ctx.base is None:
+        return f"에이전트 정의가 없어 {name}를 쓸 수 없습니다."
+    missing = sorted(set(needed) - set(ctx.team.agents))
+    return f"{name}에 필요한 에이전트 정의가 없습니다: {', '.join(missing)} (agents/이름/AGENT.md)" if missing else None
+
+
+def aggregator_prompt(question: str, parts: list[tuple[str, str, str]], *, task: str = "맡은 작업", result: str = "결과", form: str = "") -> str:
+    """aggregator에게 줄 글: 원래 질문, 가지마다 [이름] 맡은 것과 결과, 합치는 형식(C90 ponytail-audit P4). parts는 (이름, 맡은 것, 결과)."""
+    blocks = [f"[{name}] {task}: {asked}\n{result}:\n{answer}" for name, asked, answer in parts]
+    return "\n\n".join([f"원래 질문: {question}", *blocks, *([form] if form else [])])
+
+
 LEADING = re.compile(r"^\s*(?:[-*•]|\d+[.)])?\s*")  # 줄 앞의 목록 기호와 번호(C16, C90 리뷰 B8)
 
 

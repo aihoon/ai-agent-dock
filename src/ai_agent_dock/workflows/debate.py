@@ -19,7 +19,7 @@ from langgraph.types import Send
 
 from ..core.orchestration import Workflow, WorkflowContext, ask_agent
 from ..core.safety import wrap_untrusted
-from .common import branch_config, writer_tools
+from .common import branch_config, missing_agents, writer_tools
 
 NAME = "debate"
 DEBATER = "debater"
@@ -184,12 +184,7 @@ def build(ctx: WorkflowContext) -> StateGraph:
 
 
 def unavailable(ctx: WorkflowContext) -> str | None:
-    if ctx.team is None or ctx.base is None:
-        return f"에이전트 정의가 없어 {NAME}를 쓸 수 없습니다."
-    missing = [name for name in (DEBATER, AGGREGATOR) if name not in ctx.team.agents]
-    if missing:
-        return f"{NAME}에 필요한 에이전트 정의가 없습니다: {', '.join(missing)} (agents/이름/AGENT.md)"
-    return None
+    return missing_agents(ctx, NAME, {DEBATER, AGGREGATOR})
 
 
 WORKFLOW = Workflow(

@@ -15,7 +15,7 @@ from langgraph.types import Send
 
 from ..core.orchestration import Workflow, WorkflowContext, ask_agent
 from ..core.safety import find_instructions, wrap_untrusted
-from .common import branch_config, clean_label
+from .common import branch_config, clean_label, missing_agents
 
 JUDGE = "judge"
 VOTES = 3
@@ -94,11 +94,7 @@ def build(ctx: WorkflowContext) -> StateGraph:
 
 
 def unavailable(ctx: WorkflowContext) -> str | None:
-    if ctx.team is None or ctx.base is None:
-        return "에이전트 정의가 없어 voting을 쓸 수 없습니다."
-    if JUDGE not in ctx.team.agents:
-        return f"voting에 필요한 에이전트 정의가 없습니다: {JUDGE} (agents/이름/AGENT.md)"
-    return None
+    return missing_agents(ctx, "voting", {JUDGE})
 
 
 WORKFLOW = Workflow(

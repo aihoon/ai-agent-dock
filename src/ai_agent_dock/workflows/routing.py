@@ -13,7 +13,7 @@ from langgraph.graph import END, START, StateGraph
 
 from ..core.agents import MAIN
 from ..core.orchestration import Workflow, WorkflowContext, ask_agent
-from .common import AgentSlot, clean_label, slot_config
+from .common import AgentSlot, clean_label, missing_agents, slot_config
 
 ROUTER = "router"
 FALLBACK = "general"
@@ -80,12 +80,7 @@ def build(ctx: WorkflowContext) -> StateGraph:
 
 
 def unavailable(ctx: WorkflowContext) -> str | None:
-    if ctx.team is None or ctx.base is None:
-        return "에이전트 정의가 없어 routing을 쓸 수 없습니다."
-    missing = sorted({ROUTER, *(r.agent for r in ROUTES)} - set(ctx.team.agents))
-    if missing:
-        return f"routing에 필요한 에이전트 정의가 없습니다: {', '.join(missing)} (agents/이름/AGENT.md)"
-    return None
+    return missing_agents(ctx, "routing", {ROUTER, *(r.agent for r in ROUTES)})
 
 
 WORKFLOW = Workflow(

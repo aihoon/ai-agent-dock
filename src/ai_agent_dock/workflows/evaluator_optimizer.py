@@ -15,7 +15,7 @@ from langgraph.graph import END, START, StateGraph
 from ..core.evals.rubric import EVALUATOR, FAIL, Verdict, evaluator_prompt, failed, read_verdicts, verdict_line
 from ..core.orchestration import Workflow, WorkflowContext, ask_agent
 from ..core.retrieval import check_citations
-from .common import writer_tools
+from .common import missing_agents, writer_tools
 
 NAME = "evaluator-optimizer"
 
@@ -119,11 +119,7 @@ def verdicts_of(state: State) -> list[Verdict]:
 
 
 def unavailable(ctx: WorkflowContext) -> str | None:
-    if ctx.team is None or ctx.base is None:
-        return f"에이전트 정의가 없어 {NAME}를 쓸 수 없습니다."
-    if EVALUATOR not in ctx.team.agents:
-        return f"{NAME}에 필요한 에이전트 정의가 없습니다: {EVALUATOR} (agents/이름/AGENT.md)"
-    return None
+    return missing_agents(ctx, NAME, {EVALUATOR})
 
 
 WORKFLOW = Workflow(

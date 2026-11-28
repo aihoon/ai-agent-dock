@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Protocol
 
 
@@ -28,12 +27,4 @@ class KnowledgeSearch(Protocol):
 
     def search(self, query: str, top_k: int = 3) -> list[Hit]:
         """질문과 가까운 조각을 점수 순으로 돌려준다."""
-        ...
-
-
-class KnowledgeIndexer(Protocol):
-    """색인을 만드는 약속. 스크립트만 안다. 원격 저장소라면 이 역할은 그 시스템이 맡는다."""
-
-    def refresh(self, root: Path) -> RefreshReport:
-        """폴더의 문서와 저장소를 맞춘다."""
         ...

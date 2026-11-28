@@ -20,7 +20,7 @@ from ..core.agents import MAIN
 from ..core.orchestration import Workflow, WorkflowContext, ask_agent
 from ..core.retrieval import check_citations
 from ..core.tools import Node, tools_for
-from .common import LEADING, AgentSlot, branch_config, clean_label, slot_config
+from .common import AgentSlot, LEADING, aggregator_prompt, branch_config, clean_label, missing_agents, slot_config
 
 SELECTOR = "selector"
 AGGREGATOR = "aggregator"
@@ -62,11 +62,6 @@ def read_sections(label: str, question: str) -> list[tuple[str, str]]:
         if name in names and name not in chosen:
             chosen[name] = sub.strip() or question  # 질문을 비우면 원래 질문을 넘긴다.
     return list(chosen.items())[:MAX_ROUTES]
-
-
-def aggregator_prompt(question: str, sections: list[dict]) -> str:
-    parts = [f"[{s['route']}] 맡은 질문: {s['question']}\n답:\n{s['answer']}" for s in sections]
-    return "\n\n".join([f"원래 질문: {question}", *parts])
 
 
 def build(ctx: WorkflowContext) -> StateGraph:
@@ -112,7 +107,7 @@ def build(ctx: WorkflowContext) -> StateGraph:
         if len(done) == 1:  # 하나만 골랐으면 그 답이 최종 답이다.
             return {"status": "completed", "answer": done[0]["answer"]}
         ctx.progress("합치기: aggregator 에이전트")
-        answer = ask_agent(ctx.team.config_for(AGGREGATOR, ctx.base), aggregator_prompt(state["question"], done))
+        answer = ask_agent(ctx.team.config_for(AGGREGATOR, ctx.base), aggregator_prompt(state["question"], [(s["route"], s["question"], s["answer"]) for s in done], task="맡은 질문", result="답"))
         unknown = check_citations(answer, ctx.knowledge.seen).unknown if ctx.knowledge else []  # URL 출처는 보지 않는다(5.1).
         if unknown:
             ctx.progress(f"※ 검색 결과에 없는 출처: {', '.join(unknown)}")
@@ -136,13 +131,7 @@ def build(ctx: WorkflowContext) -> StateGraph:
 
 
 def unavailable(ctx: WorkflowContext) -> str | None:
-    if ctx.team is None or ctx.base is None:
-        return "에이전트 정의가 없어 sectioning을 쓸 수 없습니다."
-    needed = {SELECTOR, AGGREGATOR, MAIN, *(s.agent for s in MENU)}
-    missing = sorted(needed - set(ctx.team.agents))
-    if missing:
-        return f"sectioning에 필요한 에이전트 정의가 없습니다: {', '.join(missing)} (agents/이름/AGENT.md)"
-    return None
+    return missing_agents(ctx, "sectioning", {SELECTOR, AGGREGATOR, MAIN, *(s.agent for s in MENU)})
 
 
 WORKFLOW = Workflow(

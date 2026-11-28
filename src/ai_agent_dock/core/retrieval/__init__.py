@@ -3,7 +3,7 @@
 from .citation import check_citations
 from .embedding import HashingEmbedder, OpenAIEmbedder
 from .index import KnowledgeIndex
-from .types import Hit, KnowledgeIndexer, KnowledgeSearch, RefreshReport
+from .types import Hit, KnowledgeSearch, RefreshReport
 from .knowledge import Knowledge, open_knowledge
 from .tool import CITATION_RULE, make_search_docs_tool
 
@@ -11,7 +11,6 @@ __all__ = [
     "CITATION_RULE",
     "HashingEmbedder",
     "Hit",
-    "KnowledgeIndexer",
     "KnowledgeSearch",
     "RefreshReport",
     "Knowledge",

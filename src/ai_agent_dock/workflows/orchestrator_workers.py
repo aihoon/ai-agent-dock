@@ -20,7 +20,7 @@ from ..core.agents import MAIN
 from ..core.orchestration import Workflow, WorkflowContext, ask_agent
 from ..core.retrieval import check_citations
 from ..core.tools import Node, tools_for
-from .common import FALLBACK, LEADING, MAX_TASKS, ONLY_MINE, WORKERS, branch_config, branch_name, clean_label, slot_config
+from .common import FALLBACK, LEADING, MAX_TASKS, aggregator_prompt, ONLY_MINE, WORKERS, branch_config, branch_name, clean_label, missing_agents, slot_config
 
 NAME = "orchestrator-workers"
 ORCHESTRATOR = "orchestrator"
@@ -60,11 +60,6 @@ def read_tasks(label: str) -> list[tuple[str, str]]:
 
 def worker_prompt(question: str, task: str) -> str:
     return f"원래 질문: {question}\n맡은 작업: {task}\n{ONLY_MINE}"
-
-
-def aggregator_prompt(question: str, results: list[dict]) -> str:
-    parts = [f"[{branch_name(r)}] 맡은 작업: {r['task']}\n결과:\n{r['answer']}" for r in results]
-    return "\n\n".join([f"원래 질문: {question}", *parts, FORMAT])
 
 
 def build(ctx: WorkflowContext) -> StateGraph:
@@ -111,7 +106,7 @@ def build(ctx: WorkflowContext) -> StateGraph:
         if not any(r["ok"] for r in done):  # 모두 실패하면 합치지 않는다(Q9).
             return {"status": "completed", "answer": "\n".join(f"{branch_name(r)}: {r['answer']}" for r in done)}
         ctx.progress(f"합치기: {AGGREGATOR}")
-        answer = ask_agent(ctx.team.config_for(AGGREGATOR, ctx.base), aggregator_prompt(state["question"], done))
+        answer = ask_agent(ctx.team.config_for(AGGREGATOR, ctx.base), aggregator_prompt(state["question"], [(branch_name(r), r["task"], r["answer"]) for r in done], form=FORMAT))
         unknown = check_citations(answer, ctx.knowledge.seen).unknown if ctx.knowledge else []  # URL 출처는 보지 않는다.
         if unknown:
             ctx.progress(f"※ 검색 결과에 없는 출처: {', '.join(unknown)}")
@@ -135,12 +130,7 @@ def build(ctx: WorkflowContext) -> StateGraph:
 
 
 def unavailable(ctx: WorkflowContext) -> str | None:
-    if ctx.team is None or ctx.base is None:
-        return f"에이전트 정의가 없어 {NAME}를 쓸 수 없습니다."
-    missing = sorted({ORCHESTRATOR, AGGREGATOR, MAIN, *(w.agent for w in WORKERS)} - set(ctx.team.agents))
-    if missing:
-        return f"{NAME}에 필요한 에이전트 정의가 없습니다: {', '.join(missing)} (agents/이름/AGENT.md)"
-    return None
+    return missing_agents(ctx, NAME, {ORCHESTRATOR, AGGREGATOR, MAIN, *(w.agent for w in WORKERS)})
 
 
 WORKFLOW = Workflow(
